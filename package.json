@@ -1,0 +1,42 @@
+{
+  "name": "atomic-os",
+  "version": "1.0.0",
+  "private": false,
+  "description": "Atomic Operating System — a structured-read + atomic-edit MCP server that closes the Line-Oriented Action Bottleneck for AI CLI agents. Intention high, action minimal, proof clear, rollback possible, continuity persisted, product as the end.",
+  "license": "MIT",
+  "type": "commonjs",
+  "bin": {
+    "atomic-os": "src/atomic-edit-mcp-launcher.sh"
+  },
+  "scripts": {
+    "build": "node src/build.mjs",
+    "start": "bash src/atomic-edit-mcp-launcher.sh",
+    "smoke": "node src/smoke.mjs",
+    "test": "node src/smoke.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "ts-morph": "^28.0.0",
+    "typescript": "^5.5.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "vitest": "^3.0.0"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ai-agent",
+    "code-editing",
+    "atomic-edit",
+    "claude-code",
+    "opencode",
+    "codex",
+    "structured-edit",
+    "ast"
+  ]
+}

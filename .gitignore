@@ -1,0 +1,11 @@
+node_modules/
+src/dist/
+.atomic/
+.atomic-edit-locks/
+docs/ai/traces/
+*.log
+.DS_Store
+
+# Your own governance config (copy from atomic-edit.protected.example.json).
+# Tracked-or-not is your call; the example IS tracked as documentation.
+atomic-edit.protected.json

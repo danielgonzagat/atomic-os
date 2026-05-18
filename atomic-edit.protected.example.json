@@ -1,0 +1,11 @@
+{
+  "_comment": "Copy this file to atomic-edit.protected.json at the ROOT of the repo you want atomic-os to operate on (NOT here). Any path listed becomes hard-refused for every AI CLI edit. 'files' = exact repo-relative paths. 'globs' = JS RegExp source tested against the repo-relative path (forward slashes). Equivalent env var: ATOMIC_EDIT_PROTECTED_FILES (OS-path-delimited list). Empty/absent = only the path-escape boundary is enforced.",
+  "files": [
+    "CLAUDE.md",
+    "AGENTS.md"
+  ],
+  "globs": [
+    "^\\.github/workflows/.+$",
+    "^ops/.+\\.json$"
+  ]
+}
