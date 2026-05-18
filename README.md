@@ -243,7 +243,9 @@ The server operates on **whatever git repo is the current working directory
 when your CLI launches it** (`guard.ts` anchors to the nearest `.git`), so one
 install serves every project. Point your CLI's MCP config at
 `src/atomic-edit-mcp-launcher.sh`. Exact snippets for **Claude Code**,
-**OpenCode** and **Codex** are in **`docs/INSTALL.md`**.
+**OpenCode** and **Codex** are in **`docs/INSTALL.md`**, and the actual
+genericized enforcement artifacts for OpenCode and Codex (the same law as the
+Claude hook, KLOEL coupling stripped) ship in **`integrations/`**.
 
 Define what is off-limits in the target repo (optional but recommended):
 copy `atomic-edit.protected.example.json` → `atomic-edit.protected.json` at
@@ -268,13 +270,21 @@ src/                       the Atomic OS itself
   smoke.ts smoke.mjs       self-validating regression suite
   atomic-only-hook.mjs     PreToolUse enforcement (native diff banned)
   trace-coverage-audit.mjs audit-atomicity.mjs worker-scope-check.mjs
+integrations/                CLI-specific enforcement (genericized, atomic-only)
+  opencode/workspace-gates.ts  OpenCode plugin — native code edit banned
+  codex/hooks.json             Codex hook config — native code edit banned
+  codex/AGENTS.codex.md        original universal Codex doctrine (verbatim)
 docs/
   PRINCIPLE_ORIGINAL_PT.md the founding doctrine, verbatim (constitution)
   OPERATING_GUIDE.md       how to operate the tools each session
   INSTALL.md               per-CLI MCP wiring (Claude/OpenCode/Codex)
+  CLI_ACTIVATION_MATRIX.md the canonical "one tool, three CLIs" reference
+  AGENT_RUNBOOK.md         operational workflow for any AI CLI
+  AGENTS.md                portable universal doctrine (drop into agent cfg)
   GOVERNANCE.md            how to declare your own protected files
   knowledge/               everything we know (incl. full A/B loop history)
   evidence/                first-round raw Atomic-vs-Normal benchmark logs
+integrations/{opencode,codex}/README.md   per-CLI install + verify
 atomic-edit.protected.example.json   copy → your repo root to set governance
 ```
 
