@@ -20,136 +20,14 @@
  * module stays unit-testable.
  */
 
+
+import { validateLanguage } from './lang-bridge.js';
 import * as ts from 'typescript';
-import * as crypto from 'crypto';
-import type { PreservationZone, ModifiedZone, MovementZone } from './trace.js';
-
-const sha256 = (s: string): string => crypto.createHash('sha256').update(s).digest('hex');
-
-export interface Position {
-  /** 1-based line. */
-  line: number;
-  /** 1-based column (UTF-16 code units within the line). */
-  column: number;
-}
-
-export interface EditZones {
-  preservedZones: PreservationZone[];
-  modifiedZones: ModifiedZone[];
-  movementZones: MovementZone[];
-}
-
-export const EMPTY_ZONES: EditZones = {
-  preservedZones: [],
-  modifiedZones: [],
-  movementZones: [],
-};
-
-/**
- * Compute exact preservation / modification / movement zones by comparing
- * `before` and `after` byte-by-byte. This is the universal topology analyser
- * that works for ANY edit type — range, text, symbol, import, etc.
- *
- * Strategy:
- *  1. Find the first byte where before[i] !== after[i]  → prefix preserved zone
- *  2. Find the last byte where before[j] !== after[j]    → suffix preserved zone
- *  3. The span between first and last diff is the modified zone
- *  4. If before and after are identical → no zones
- */
-export function computeZones(
-  before: string,
-  after: string,
-  opKind = 'changed_span',
-): EditZones {
-  const preservedZones: PreservationZone[] = [];
-  const modifiedZones: ModifiedZone[] = [];
-
-  if (before === after) {
-    preservedZones.push({
-      kind: 'unchanged_content',
-      description: `Full file (${before.length} bytes) unchanged`,
-      byteStart: 0,
-      byteEnd: before.length,
-      byteLength: before.length,
-      beforeHash: sha256(before),
-      afterHash: sha256(after),
-    });
-    return { preservedZones, modifiedZones, movementZones: [] };
-  }
-
-  let firstDiff = 0;
-  while (
-    firstDiff < before.length &&
-    firstDiff < after.length &&
-    before[firstDiff] === after[firstDiff]
-  ) {
-    firstDiff++;
-  }
-
-  let lastBeforeDiff = before.length - 1;
-  let lastAfterDiff = after.length - 1;
-  while (
-    lastBeforeDiff >= firstDiff &&
-    lastAfterDiff >= firstDiff &&
-    before[lastBeforeDiff] === after[lastAfterDiff]
-  ) {
-    lastBeforeDiff--;
-    lastAfterDiff--;
-  }
-  lastBeforeDiff++;
-  lastAfterDiff++;
-
-  if (firstDiff > 0) {
-    const prefixText = before.slice(0, firstDiff);
-    preservedZones.push({
-      kind: 'prefix_preserved',
-      description: `Bytes 0–${firstDiff - 1} — prefix preserved unchanged`,
-      byteStart: 0,
-      byteEnd: firstDiff,
-      byteLength: firstDiff,
-      beforeHash: sha256(prefixText),
-      afterHash: sha256(prefixText),
-      sample: prefixText.length > 80 ? prefixText.slice(-80) : prefixText,
-    });
-  }
-
-  const oldChunk = before.slice(firstDiff, lastBeforeDiff);
-  const newChunk = after.slice(firstDiff, lastAfterDiff);
-  modifiedZones.push({
-    kind: opKind,
-    byteStart: firstDiff,
-    byteEnd: lastBeforeDiff,
-    newByteLength: newChunk.length,
-    oldTextHash: sha256(oldChunk),
-    newTextHash: sha256(newChunk),
-    oldSample: oldChunk.slice(0, 200),
-    newSample: newChunk.slice(0, 200),
-    description:
-      oldChunk.length === 0
-        ? `Insert ${newChunk.length} bytes at offset ${firstDiff}`
-        : newChunk.length === 0
-          ? `Delete ${oldChunk.length} bytes at offset ${firstDiff}`
-          : `Replace ${oldChunk.length} bytes at offset ${firstDiff} with ${newChunk.length} bytes`,
-  });
-
-  if (lastBeforeDiff < before.length) {
-    const suffixText = before.slice(lastBeforeDiff);
-    if (suffixText.length > 0) {
-      preservedZones.push({
-        kind: 'suffix_preserved',
-        description: `Bytes ${lastBeforeDiff}–${before.length - 1} — suffix preserved unchanged`,
-        byteStart: lastBeforeDiff,
-        byteEnd: before.length,
-        byteLength: suffixText.length,
-        beforeHash: sha256(suffixText),
-        afterHash: sha256(suffixText),
-        sample: suffixText.length > 80 ? suffixText.slice(0, 80) : suffixText,
-      });
-    }
-  }
-
-  return { preservedZones, modifiedZones, movementZones: [] };
-}
+import { structuralErrors } from './engine-structural.js';
+export type { EditZones } from './engine-zones.js';
+import type { EditZones } from './engine-zones.js';
+export { EMPTY_ZONES, computeZones } from './engine-zones.js';
+import { EMPTY_ZONES, computeZones } from './engine-zones.js';
 
 export interface Position {
   /** 1-based line. */
@@ -165,7 +43,7 @@ export interface TextEditSpec {
 }
 
 export interface ValidationResult {
-  language: 'ts' | 'json' | 'structural' | 'generic';
+  language: 'ts' | 'json' | 'structural' | 'generic' | 'python' | 'go' | 'rust' | 'ruby' | 'shell' | 'java' | 'c' | 'cpp' | 'javascript';
   /** Syntactic-diagnostic count before the edit. */
   before: number;
   /** Syntactic-diagnostic count after the edit. */
@@ -189,8 +67,9 @@ export interface ApplyResult {
 }
 
 const TS_EXT = new Set(['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs']);
+export { TS_EXT };
 
-function extOf(file: string): string {
+export function extOf(file: string): string {
   const i = file.lastIndexOf('.');
   return i < 0 ? '' : file.slice(i).toLowerCase();
 }
@@ -274,6 +153,25 @@ export function validate(file: string, before: string, after: string): Validatio
       introduced: !aOk && bOk ? 'edit produced invalid JSON' : undefined,
     };
   }
+  // Try real language parser before falling back to structural balance
+  const langResult = validateLanguage(file, after);
+  if (langResult.realParser || langResult.language !== 'generic') {
+    if (langResult.realParser) {
+      // Parser was available and ran — use its result
+      // We need the BEFORE state too — parse the original
+      const beforeResult = validateLanguage(file, before);
+      const b = beforeResult.realParser ? beforeResult.errorCount : 0;
+      const a = langResult.errorCount;
+      return {
+        language: langResult.language as ValidationResult['language'],
+        before: b,
+        after: a,
+        ok: a <= b,
+        introduced: a > b ? langResult.firstError : undefined,
+      };
+    }
+    // Parser not available — fall through to structural
+  }
   if (STRUCTURAL_EXT.has(ext)) {
     const b = structuralErrors(ext, before);
     const a = structuralErrors(ext, after);
@@ -325,106 +223,10 @@ const STRUCTURAL_EXT = new Set([
   '.toml',
 ]);
 
-const PAIRS: Record<string, string> = { ')': '(', ']': '[', '}': '{' };
-const OPEN = new Set(['(', '[', '{']);
 
 /** Quote chars that start a string per family. Hash-comment langs use #;
  * C-family use // and /​* *​/. We stay conservative: only well-known forms,
  * never guessing, so valid code never trips. */
-function structuralErrors(ext: string, text: string): string[] {
-  const errors: string[] = [];
-  const stack: { ch: string; line: number }[] = [];
-  const hashComment = new Set(['.py', '.rb', '.sh', '.bash', '.zsh', '.yaml', '.yml', '.toml']).has(
-    ext,
-  );
-  const slashComment = new Set([
-    '.go',
-    '.rs',
-    '.java',
-    '.kt',
-    '.c',
-    '.h',
-    '.cc',
-    '.cpp',
-    '.hpp',
-    '.cs',
-    '.php',
-    '.swift',
-    '.scala',
-    '.css',
-    '.scss',
-    '.less',
-    '.sql',
-  ]).has(ext);
-  let line = 1;
-  let i = 0;
-  const n = text.length;
-  while (i < n) {
-    const c = text[i];
-    if (c === '\n') {
-      line++;
-      i++;
-      continue;
-    }
-    // line comment
-    if (hashComment && c === '#') {
-      const nl = text.indexOf('\n', i);
-      i = nl === -1 ? n : nl;
-      continue;
-    }
-    if (slashComment && c === '/' && text[i + 1] === '/') {
-      const nl = text.indexOf('\n', i);
-      i = nl === -1 ? n : nl;
-      continue;
-    }
-    if (slashComment && c === '/' && text[i + 1] === '*') {
-      const end = text.indexOf('*/', i + 2);
-      if (end === -1) {
-        errors.push(`unterminated block comment (from line ${line})`);
-        return errors;
-      }
-      for (let k = i; k < end; k++) if (text[k] === '\n') line++;
-      i = end + 2;
-      continue;
-    }
-    // string literal — skip content, honor backslash escapes
-    if (c === '"' || c === "'" || c === '`') {
-      const startLine = line;
-      let j = i + 1;
-      while (j < n) {
-        const d = text[j];
-        if (d === '\\') {
-          j += 2;
-          continue;
-        }
-        if (d === '\n') {
-          line++;
-          // single/double quotes don't span lines in most langs; backtick does
-          if (c !== '`') {
-            errors.push(`unterminated string (line ${startLine})`);
-            break;
-          }
-        }
-        if (d === c) break;
-        j++;
-      }
-      if (j >= n) errors.push(`unterminated string (line ${startLine})`);
-      i = j + 1;
-      continue;
-    }
-    if (OPEN.has(c)) {
-      stack.push({ ch: c, line });
-    } else if (c in PAIRS) {
-      const top = stack.pop();
-      if (!top || top.ch !== PAIRS[c]) {
-        errors.push(`unbalanced '${c}' (line ${line})`);
-      }
-    }
-    i++;
-  }
-  for (const o of stack) errors.push(`unclosed '${o.ch}' (line ${o.line})`);
-  return errors;
-}
 
 /** Convert a 1-based (line,column) to an absolute UTF-16 offset. */
 export function posToOffset(text: string, pos: Position): number {
@@ -444,7 +246,7 @@ export function posToOffset(text: string, pos: Position): number {
   const lineEnd = text.indexOf('\n', offset);
   const lineLen = (lineEnd === -1 ? text.length : lineEnd) - offset;
   // column may equal lineLen + 1 (one past the last char = end-of-line insert).
-  if (pos.column - 1 > lineLen + 1) {
+  if (pos.column - 1 > lineLen) {
     throw new Error(
       `column ${pos.column} out of range on line ${pos.line} (line has ${lineLen} char(s))`,
     );

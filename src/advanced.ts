@@ -15,7 +15,7 @@ import * as path from 'node:path';
 import * as ts from 'typescript';
 import { validate, type ValidationResult } from './engine.js';
 import { resolveSymbol } from './symbols.js';
-import { graphemeDiff } from './textunit.js';
+export { previewDiff, characterDiff } from './advanced-diff.js';
 
 export type SymbolOp = 'replace' | 'insert_after' | 'remove';
 
@@ -144,7 +144,7 @@ function findNearestTsconfig(absFile: string, repoRoot: string): string | undefi
 /**
  * True cross-file, scope-correct rename via the TypeScript language service
  * (loaded from the nearest tsconfig). All-or-nothing: every touched file is
- * revalidated; if any would regress syntactically, NOTHING is written and the
+ * revalidated; if a would regress syntactically, NOTHING is written and the
  * caller is told which file failed.
  */
 export async function renameSymbolCrossFile(
@@ -164,6 +164,21 @@ export async function renameSymbolCrossFile(
     : new Project({ compilerOptions: { allowJs: true, noEmit: true } });
   if (!tsconfig)
     project.addSourceFilesAtPaths(path.join(path.dirname(absFile), '**/*.{ts,tsx,js,jsx}'));
+  // A tsconfig commonly EXCLUDES test files (e.g. "**/*spec.ts"), but a correct
+  // cross-file rename must still reach references that live INSIDE specs — test
+  // object keys ({ method: jest.fn() }), `Pick<Class,'method'>` string-literal
+  // type members, and property access on typed test doubles. Without loading
+  // them the language service silently under-collects, forcing manual fixups.
+  // Explicitly add the test/spec sources (node_modules/dist excluded).
+  {
+    const projRoot = tsconfig ? path.dirname(tsconfig) : path.dirname(absFile);
+    project.addSourceFilesAtPaths([
+      path.join(projRoot, '**/*.spec.{ts,tsx}'),
+      path.join(projRoot, '**/*.test.{ts,tsx}'),
+      `!${path.join(projRoot, '**/node_modules/**')}`,
+      `!${path.join(projRoot, '**/dist/**')}`,
+    ]);
+  }
 
   const sf = project.getSourceFile(absFile) ?? project.addSourceFileAtPath(absFile);
   const original = new Map<string, string>();
@@ -188,11 +203,122 @@ export async function renameSymbolCrossFile(
   }
   const oldName = id.getText();
   const renameable = id.asKindOrThrow(ts.SyntaxKind.Identifier);
+  // Owning class/interface of the renamed member (for binding-aware test-double
+  // key coverage after the symbol rename); undefined for free symbols.
+  let ownerTypeName: string | undefined;
+  type WalkNode = { getKind: () => number; getParent: () => unknown; getName?: () => string | undefined };
+  let cur = renameable.getParent() as WalkNode | undefined;
+  while (cur) {
+    const pk = cur.getKind();
+    if (pk === ts.SyntaxKind.ClassDeclaration || pk === ts.SyntaxKind.InterfaceDeclaration) {
+      ownerTypeName = cur.getName?.();
+      break;
+    }
+    cur = cur.getParent() as WalkNode | undefined;
+  }
   const totalReferences = renameable
     .findReferences()
     .reduce((n, r) => n + r.getReferences().length, 0);
 
   renameable.rename(newName);
+
+  // Binding-aware coverage for test-double property keys with NO symbol link to
+  // the renamed member (ts-morph's rename cannot reach them): NestJS DI provider
+  // doubles `{ provide: <OwnerType>, useValue|useFactory: { <oldName>: ... } }`
+  // and object literals typed `Partial<OwnerType>` / `Pick<OwnerType, ...>`. Only
+  // a key provably bound to OwnerType is renamed — never an unrelated same-name key.
+  if (ownerTypeName) {
+    const K = ts.SyntaxKind;
+    const renameKeyIn = (obj: unknown): void => {
+      const o = obj as { getKind?: () => number; getProperties?: () => unknown[] } | undefined;
+      if (!o || o.getKind?.() !== K.ObjectLiteralExpression) return;
+      for (const prop of o.getProperties?.() ?? []) {
+        const p = prop as { getKind?: () => number; getNameNode?: () => { getText?: () => string; replaceWithText?: (t: string) => void } | undefined };
+        const pk = p.getKind?.();
+        if (pk !== K.PropertyAssignment && pk !== K.MethodDeclaration && pk !== K.GetAccessor && pk !== K.SetAccessor) continue;
+        const nameNode = p.getNameNode?.();
+        const raw = nameNode?.getText?.() ?? '';
+        const q = raw.length > 1 && (raw[0] === "'" || raw[0] === '"' || raw[0] === '`') ? raw[0] : '';
+        const bare = q ? raw.slice(1, -1) : raw;
+        if (bare === oldName) nameNode?.replaceWithText?.(q ? q + newName + q : newName);
+      }
+    };
+    const factoryObj = (init: unknown): unknown => {
+      const f = init as { getKind?: () => number; getBody?: () => unknown } | undefined;
+      const k = f?.getKind?.();
+      if (k !== K.ArrowFunction && k !== K.FunctionExpression) return undefined;
+      const body = f?.getBody?.() as { getKind?: () => number; getExpression?: () => unknown; getStatements?: () => unknown[] } | undefined;
+      const bk = body?.getKind?.();
+      if (bk === K.ParenthesizedExpression) return body?.getExpression?.();
+      if (bk === K.ObjectLiteralExpression) return body;
+      if (bk === K.Block) {
+        for (const st of body?.getStatements?.() ?? []) {
+          const s = st as { getKind?: () => number; getExpression?: () => unknown };
+          if (s.getKind?.() === K.ReturnStatement) {
+            const e = s.getExpression?.() as { getKind?: () => number; getExpression?: () => unknown } | undefined;
+            return e?.getKind?.() === K.ParenthesizedExpression ? e.getExpression?.() : e;
+          }
+        }
+      }
+      return undefined;
+    };
+    // After renaming a test-double KEY, the bound variable's PROPERTY ACCESSES
+    // (`dbl.oldName(...)`, `expect(dbl.oldName)...`) still name the old member —
+    // ts-morph's rename cannot reach them because the double is an untyped /
+    // structurally-typed object with no symbol link to OwnerType. Rename those
+    // accesses too, but ONLY on the exact variable proven to be the double.
+    const renameAccessesOfVar = (nameNode: unknown): void => {
+      const n = nameNode as { findReferencesAsNodes?: () => unknown[] } | undefined;
+      let refs: unknown[] = [];
+      try { refs = n?.findReferencesAsNodes?.() ?? []; } catch { return; }
+      for (const ref of refs) {
+        const r = ref as { getParent?: () => unknown };
+        const parent = r.getParent?.() as { getKind?: () => number; getExpression?: () => unknown; getNameNode?: () => { getText?: () => string; replaceWithText?: (t: string) => void } | undefined } | undefined;
+        if (parent?.getKind?.() !== K.PropertyAccessExpression) continue;
+        if (parent.getExpression?.() !== ref) continue; // ref must be the object, not the member name
+        const nn = parent.getNameNode?.();
+        if (nn?.getText?.() === oldName) nn.replaceWithText?.(newName);
+      }
+    };
+    // Peel casts/parens so `useValue: dbl as never` / `(dbl)` / `dbl!` resolve to
+    // the underlying identifier or object literal. These wrappers are pervasive in
+    // strict codebases (e.g. `as never` to satisfy unsafe-cast gates) and would
+    // otherwise hide the DI double from binding-aware coverage.
+    const PEEL = new Set([K.AsExpression, K.ParenthesizedExpression, K.NonNullExpression, K.SatisfiesExpression, K.TypeAssertionExpression]);
+    const unwrap = (n: unknown): unknown => {
+      let cur = n as { getKind?: () => number; getExpression?: () => unknown } | undefined;
+      let guard = 0;
+      while (cur && cur.getKind && PEEL.has(cur.getKind()) && cur.getExpression && guard++ < 10) {
+        cur = cur.getExpression() as typeof cur;
+      }
+      return cur;
+    };
+    for (const f of project.getSourceFiles()) {
+      try {
+        for (const obj of f.getDescendantsOfKind(K.ObjectLiteralExpression)) {
+          const o = obj as unknown as { getProperty?: (n: string) => { getInitializer?: () => unknown } | undefined };
+          const provideVal = unwrap(o.getProperty?.('provide')?.getInitializer?.()) as { getText?: () => string } | undefined;
+          if (provideVal?.getText?.() !== ownerTypeName) continue;
+          const useValue = unwrap(o.getProperty?.('useValue')?.getInitializer?.()) as { getKind?: () => number; getSymbol?: () => { getValueDeclaration?: () => { getInitializer?: () => unknown } | undefined } | undefined } | undefined;
+          if (useValue?.getKind?.() === K.ObjectLiteralExpression) renameKeyIn(useValue);
+          else if (useValue?.getKind?.() === K.Identifier) {
+            const vdecl = useValue.getSymbol?.()?.getValueDeclaration?.() as { getInitializer?: () => unknown; getNameNode?: () => unknown } | undefined;
+            renameKeyIn(vdecl?.getInitializer?.());
+            renameAccessesOfVar(vdecl?.getNameNode?.());
+          }
+          renameKeyIn(factoryObj(o.getProperty?.('useFactory')?.getInitializer?.()));
+        }
+        for (const v of f.getDescendantsOfKind(K.VariableDeclaration)) {
+          const vd = v as unknown as { getTypeNode?: () => { getText?: () => string } | undefined; getInitializer?: () => unknown };
+          const tn = vd.getTypeNode?.()?.getText?.() ?? '';
+          if (tn !== ownerTypeName && !new RegExp(`\\b(?:Partial|Pick|Record|Mocked)\\s*<\\s*${ownerTypeName}\\b`).test(tn)) continue;
+          const init = vd.getInitializer?.();
+          if ((init as { getKind?: () => number } | undefined)?.getKind?.() === K.ObjectLiteralExpression) renameKeyIn(init);
+          renameAccessesOfVar((v as unknown as { getNameNode?: () => unknown }).getNameNode?.());
+        }
+      } catch { /* never let coverage break the validated rename */ }
+    }
+  }
 
   const changes = new Map<string, string>();
   const validations: CrossFileRenameResult['validations'] = [];
@@ -209,51 +335,54 @@ export async function renameSymbolCrossFile(
   return { symbol: `${oldName} -> ${newName}`, changes, totalReferences, validations };
 }
 
+/**
+ * Name-addressed cross-file rename: resolve a class/interface MEMBER by NAME
+ * (no line/column) and delegate to renameSymbolCrossFile. Removes the coordinate
+ * surface a weak model fumbles ("position N:M is not an identifier") and the
+ * retry fragmentation that follows — the macro/intention form of the rename
+ * operator. All coverage (test-double accesses, cast unwrap, all-or-nothing
+ * validation) is inherited unchanged from renameSymbolCrossFile.
+ */
+export async function renameMemberCrossFile(
+  absFile: string,
+  repoRoot: string,
+  className: string,
+  memberName: string,
+  newName: string,
+): Promise<CrossFileRenameResult> {
+  if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(newName)) {
+    throw new Error(`invalid identifier: ${JSON.stringify(newName)}`);
+  }
+  const { Project } = await import('ts-morph');
+  const probe = new Project({ compilerOptions: { allowJs: true, noEmit: true } });
+  const sf = probe.addSourceFileAtPath(absFile);
+  const owner =
+    (sf.getClass?.(className) as { getMembers?: () => unknown[] } | undefined) ??
+    (sf.getInterface?.(className) as { getMembers?: () => unknown[] } | undefined);
+  if (!owner) {
+    throw new Error(`class/interface "${className}" not found in ${path.basename(absFile)}`);
+  }
+  let nameNode: { getStart?: () => number } | undefined;
+  for (const m of owner.getMembers?.() ?? []) {
+    const mm = m as { getName?: () => string | undefined; getNameNode?: () => unknown };
+    if (mm.getName?.() === memberName) {
+      nameNode = mm.getNameNode?.() as { getStart?: () => number } | undefined;
+      break;
+    }
+  }
+  if (!nameNode?.getStart) {
+    throw new Error(`member "${memberName}" not found on ${className} in ${path.basename(absFile)}`);
+  }
+  const pos = sf.getLineAndColumnAtPos(nameNode.getStart());
+  return renameSymbolCrossFile(absFile, repoRoot, pos.line, pos.column, newName);
+}
+
 // ── v3: import + object-property semantic ops (adopted from Codex's
 //        semantic-edit, but routed through validate()+atomic write so they
 //        cannot persist broken code, unlike the original). ───────────────────
 
 const TS_EXT = new Set(['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs']);
-const RESERVED_IDENTIFIER_KEYS = new Set([
-  'await',
-  'break',
-  'case',
-  'catch',
-  'class',
-  'const',
-  'continue',
-  'debugger',
-  'default',
-  'delete',
-  'do',
-  'else',
-  'enum',
-  'export',
-  'extends',
-  'false',
-  'finally',
-  'for',
-  'function',
-  'if',
-  'import',
-  'in',
-  'instanceof',
-  'new',
-  'null',
-  'return',
-  'super',
-  'switch',
-  'this',
-  'throw',
-  'true',
-  'try',
-  'typeof',
-  'var',
-  'void',
-  'while',
-  'with',
-  'yield',
-]);
+const RESERVED_IDENTIFIER_KEYS = new Set('await break case catch class const continue debugger default delete do else enum export extends false finally for function if import in instanceof new null return super switch this throw true try typeof var void while with yield'.split(' '));
 
 function assertTs(file: string, op: string): void {
   const i = file.lastIndexOf('.');
@@ -632,93 +761,3 @@ export async function addAwaitToCall(
 /** Minimal unified-style line diff — for PREVIEW DISPLAY only (the edit
  * itself is atomic; this is just so the agent/human can verify before
  * commit, addressing the "blind edit" failure mode). */
-export function previewDiff(before: string, after: string, label: string): string {
-  const a = before.split('\n');
-  const b = after.split('\n');
-  // simple LCS-free context diff: find first/last divergence
-  let head = 0;
-  while (head < a.length && head < b.length && a[head] === b[head]) head++;
-  let tailA = a.length - 1;
-  let tailB = b.length - 1;
-  while (tailA >= head && tailB >= head && a[tailA] === b[tailB]) {
-    tailA--;
-    tailB--;
-  }
-  const ctx = 2;
-  const from = Math.max(0, head - ctx);
-  const lines: string[] = [`--- ${label} (before)`, `+++ ${label} (after)`];
-  for (let i = from; i < head; i++) lines.push(`  ${a[i]}`);
-  for (let i = head; i <= tailA; i++) lines.push(`- ${a[i]}`);
-  for (let i = head; i <= tailB; i++) lines.push(`+ ${b[i]}`);
-  for (let i = tailA + 1; i <= Math.min(a.length - 1, tailA + ctx); i++) lines.push(`  ${a[i]}`);
-  return lines.join('\n');
-}
-
-// ─── Atomic char-level diff ──────────────────────────────────────────────
-// previewDiff above is the line-oriented +/- block the CLI harness already
-// paints (whole line red / whole line green even for a 1-char change).
-// characterDiff below is the TRUE atomic proof: preserved chars stay
-// neutral, removed chars are red inside [- -], added chars green inside
-// {+ +}. A whole line only shows as line-removed/added when the whole line
-// was genuinely born or destroyed. ANSI-colored AND bracket-marked so it
-// stays legible on no-color terminals (git --word-diff convention). This
-// is returned in every mutating tool's payload, so the operator SEES the
-// atomicity in the tool output even though the harness's own +/- block
-// (which we cannot disable) keeps rendering line-level beside it.
-
-const ESC = '[';
-const RESET = `${ESC}0m`;
-const RED = `${ESC}31m`;
-const GREEN = `${ESC}32m`;
-const DIM = `${ESC}2m`;
-
-// LCS char-diff is O(n*m); only the divergent line block is fed to it, but
-// cap it so a genuine large rewrite falls back to line markers (honest
-// there — the whole block really did change) instead of blowing memory.
-const CHAR_DIFF_CAP = 6000;
-
-/**
- * Inline [-removed-]{+added+} diff. Operates on GRAPHEME CLUSTERS via
- * textunit.graphemeDiff — never splits a surrogate pair, combining mark or
- * ZWJ sequence, so the rendered proof can't show half an emoji (the silent
- * failure a UTF-16-index diff produces). The accent/emoji smoke cases lock
- * this in.
- */
-function renderCharDiff(oldStr: string, newStr: string): string {
-  return graphemeDiff(oldStr, newStr, {
-    del: (s) => `${RED}[-${s}-]${RESET}`,
-    add: (s) => `${GREEN}{+${s}+}${RESET}`,
-  });
-}
-
-/**
- * Character-granular inline diff of `before`→`after`. Trims common leading
- * and trailing lines, char-diffs only the divergent block, and prints it
- * with 2 lines of neutral context for orientation.
- */
-export function characterDiff(before: string, after: string, label: string): string {
-  if (before === after) return `${DIM}= ${label} (no change)${RESET}`;
-  const a = before.split('\n');
-  const b = after.split('\n');
-  let head = 0;
-  while (head < a.length && head < b.length && a[head] === b[head]) head++;
-  let tailA = a.length - 1;
-  let tailB = b.length - 1;
-  while (tailA >= head && tailB >= head && a[tailA] === b[tailB]) {
-    tailA--;
-    tailB--;
-  }
-  const oldBlock = a.slice(head, tailA + 1).join('\n');
-  const newBlock = b.slice(head, tailB + 1).join('\n');
-  const ctx = 2;
-  const out: string[] = [`${DIM}--- ${label} (atomic char-level)${RESET}`];
-  for (let i = Math.max(0, head - ctx); i < head; i++) out.push(`  ${a[i]}`);
-  if (oldBlock.length + newBlock.length > CHAR_DIFF_CAP) {
-    for (let i = head; i <= tailA; i++) out.push(`${RED}- ${a[i]}${RESET}`);
-    for (let i = head; i <= tailB; i++) out.push(`${GREEN}+ ${b[i]}${RESET}`);
-  } else {
-    for (const ln of renderCharDiff(oldBlock, newBlock).split('\n')) out.push(`  ${ln}`);
-  }
-  for (let i = tailA + 1; i <= Math.min(a.length - 1, tailA + ctx); i++) out.push(`  ${a[i]}`);
-  return out.join('\n');
-}

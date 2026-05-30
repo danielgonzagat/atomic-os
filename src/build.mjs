@@ -21,6 +21,11 @@ const ts = require('typescript');
 const ENTRY = [
   'server.ts',
   'engine.ts',
+  'engine-rename.ts',
+  'engine-ops.ts',
+  'engine-universal.ts',
+  'engine-complete.ts',
+  'lang-bridge.ts',
   'guard.ts',
   'nav.ts',
   'symbols.ts',
@@ -28,7 +33,6 @@ const ENTRY = [
   'trace.ts',
   'textunit.ts',
   'founder.ts',
-  'smoke.ts',
 ].map((f) => path.join(dir, f));
 const OUT = path.join(dir, 'dist');
 
@@ -47,6 +51,11 @@ const options = {
   sourceMap: false,
 };
 
+// Clean the output dir first so every build is deterministic — a stale or
+// anomalous dist entry (e.g. a leftover directory where a .js should be) can
+// otherwise leave a new module unregistered. Full recompile is cheap here.
+fs.rmSync(OUT, { recursive: true, force: true });
+
 const program = ts.createProgram(ENTRY, options);
 const emit = program.emit();
 const diagnostics = ts.getPreEmitDiagnostics(program).concat(emit.diagnostics);
@@ -61,7 +70,7 @@ if (errors.length > 0) {
   process.exit(1);
 }
 fs.writeFileSync(path.join(OUT, 'package.json'), JSON.stringify({ type: 'module' }) + '\n');
-for (const asset of ['worker-scope-check.mjs']) {
+for (const asset of ['worker-scope-check.mjs', 'native-worker.mjs']) {
   fs.copyFileSync(path.join(dir, asset), path.join(OUT, asset));
 }
 process.stderr.write(`atomic-edit build OK -> ${OUT}\n`);

@@ -1,30 +1,15 @@
 /**
- * Path safety guard for the atomic-edit MCP server (standalone / portable).
+ * Path safety guard for the atomic-edit MCP server.
  *
  * The blunt built-in editors have no notion of repo governance — this server
  * ADDS that safety (strengthening, not weakening, the action space):
  *   - every target must resolve inside the repo root (no path escape);
- *   - files YOU declare as PROTECTED are read-only to any AI CLI and are
- *     refused here, hard.
+ *   - governance/quality-infra files listed as PROTECTED in CLAUDE.md are
+ *     read-only to any AI CLI and are refused here, hard.
  *
- * PORTABILITY NOTE (read this if you received atomic-os from someone else):
- * the original deployment hardcoded a project-specific protected set. This
- * standalone build ships that set EMPTY by design — you define your own.
- * Two ways, both optional, evaluated at process start:
- *
- *   1. Env var `ATOMIC_EDIT_PROTECTED_FILES` — OS-path-delimited list of
- *      repo-relative paths, e.g. on macOS/Linux:
- *        ATOMIC_EDIT_PROTECTED_FILES="CLAUDE.md:.github/workflows/ci.yml"
- *   2. A JSON file `atomic-edit.protected.json` at the repo root:
- *        { "files": ["CLAUDE.md", "infra/secrets.ts"],
- *          "globs": ["^ops/.+\\.json$", "^\\.github/workflows/.+$"] }
- *      `files` = exact repo-relative paths. `globs` = JS RegExp source tested
- *      against the repo-relative path (forward slashes).
- *
- * If neither is present, ONLY the path-escape boundary is enforced (still a
- * real, valuable guarantee: nothing outside the repo root can be touched).
- * Resolution is fail-safe: a malformed config is ignored with a stderr
- * warning rather than silently disabling the escape boundary.
+ * The protected set is duplicated here intentionally and explicitly: this is
+ * a security boundary, so it must not depend on parsing a Markdown doc at
+ * runtime. Keep in sync with the "ARQUIVOS PROTEGIDOS" section of CLAUDE.md.
  */
 
 import * as childProcess from "node:child_process";
@@ -49,7 +34,12 @@ function findRepoRoot(start: string): string {
 }
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-export const REPO_ROOT = findRepoRoot(HERE);
+// Optional explicit root override (dynamic scope rooting): when set, the OS
+// operates rooted at that dir instead of where its code lives. Lets a harness/
+// worktree arm run the SAME OS binary while resolving relative paths against —
+// and being sandboxed to — its own tree, never the code's repo.
+const ROOT_OVERRIDE = process.env.ATOMIC_EDIT_REPO_ROOT?.trim();
+export const REPO_ROOT = ROOT_OVERRIDE ? canonicalPath(ROOT_OVERRIDE) : findRepoRoot(HERE);
 
 function canonicalPath(target: string): string {
   const resolved = path.resolve(target);
@@ -97,9 +87,13 @@ function gitWorktreeRoots(): string[] {
 }
 
 function allowedRepoRoots(): string[] {
-  return uniqueResolved([REPO_ROOT, ...gitWorktreeRoots(), ...envAllowedRoots()]).sort(
-    (a, b) => b.length - a.length,
-  );
+  // Explicit root override = sandbox: ONLY that root (+ any explicit
+  // ATOMIC_EDIT_ALLOWED_ROOTS), never the sibling-worktree list. Prevents an
+  // arm rooted at a worktree from reaching the main repo or sibling worktrees.
+  const roots = ROOT_OVERRIDE
+    ? [REPO_ROOT, ...envAllowedRoots()]
+    : [REPO_ROOT, ...gitWorktreeRoots(), ...envAllowedRoots()];
+  return uniqueResolved(roots).sort((a, b) => b.length - a.length);
 }
 
 function containsPath(root: string, target: string): boolean {
@@ -125,78 +119,66 @@ function resolveTargetRoot(file: string): { absPath: string; repoRoot: string } 
 }
 
 /**
- * Owner-defined governance, resolved ONCE at module load.
- *
- * Empty by default in this standalone build. Populate via the
- * `ATOMIC_EDIT_PROTECTED_FILES` env var and/or an `atomic-edit.protected.json`
- * file at the repo root (see the file header for the schema). Resolution is
- * fail-safe: any error reading/parsing config is logged to stderr and the
- * config is treated as empty — it can never weaken the path-escape boundary.
+ * Protected paths are USER-CONFIGURED — this is a generic, shareable tool with
+ * NO project-specific defaults. Two sources, merged, EMPTY by default:
+ *   1. env `ATOMIC_EDIT_PROTECTED_FILES` — OS-path-delimited exact paths/globs.
+ *   2. `atomic-edit.protected.json` at the repo root: { "files": [], "globs": [] }.
+ * With no config, nothing is protected (the path-escape containment boundary in
+ * resolveTargetRoot still always applies). See atomic-edit.protected.example.json.
  */
 interface ProtectedConfig {
   files: Set<string>;
   globs: RegExp[];
 }
 
+function globToRegExp(glob: string): RegExp {
+  const esc = glob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+  return new RegExp(`^${esc}$`);
+}
+
 function loadProtectedConfig(): ProtectedConfig {
   const files = new Set<string>();
   const globs: RegExp[] = [];
-
+  const add = (entry: string) => {
+    const e = entry.trim();
+    if (!e) return;
+    if (e.includes("*")) {
+      try {
+        globs.push(globToRegExp(e));
+      } catch {
+        process.stderr.write(`[atomic-edit guard] ignoring invalid protected glob: ${e}\n`);
+      }
+    } else {
+      files.add(e);
+    }
+  };
   const envList = process.env.ATOMIC_EDIT_PROTECTED_FILES;
-  if (envList) {
-    for (const entry of envList.split(path.delimiter)) {
-      const trimmed = entry.trim();
-      if (trimmed) files.add(trimmed.split(path.sep).join("/"));
-    }
-  }
-
+  if (envList) for (const part of envList.split(path.delimiter)) add(part);
   const configPath = path.join(REPO_ROOT, "atomic-edit.protected.json");
-  if (fs.existsSync(configPath)) {
-    try {
+  try {
+    if (fs.existsSync(configPath)) {
       const raw = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
-        files?: unknown;
-        globs?: unknown;
+        files?: string[];
+        globs?: string[];
       };
-      if (Array.isArray(raw.files)) {
-        for (const f of raw.files) {
-          if (typeof f === "string" && f.trim()) {
-            files.add(f.trim().split(path.sep).join("/"));
-          }
-        }
-      }
-      if (Array.isArray(raw.globs)) {
-        for (const g of raw.globs) {
-          if (typeof g === "string" && g.trim()) {
-            try {
-              globs.push(new RegExp(g));
-            } catch {
-              process.stderr.write(
-                `[atomic-edit guard] ignoring invalid protected glob: ${g}\n`,
-              );
-            }
-          }
-        }
-      }
-    } catch (err) {
-      process.stderr.write(
-        `[atomic-edit guard] atomic-edit.protected.json unreadable, ` +
-          `treating protected set as empty (path-escape boundary still ` +
-          `enforced): ${(err as Error).message}\n`,
-      );
+      for (const f of raw.files ?? []) add(f);
+      for (const g of raw.globs ?? []) add(g);
     }
+  } catch {
+    process.stderr.write(
+      `[atomic-edit guard] atomic-edit.protected.json unreadable, treating ` +
+        `protected set as empty (path-escape boundary still applies)\n`,
+    );
   }
-
   return { files, globs };
 }
 
 const PROTECTED = loadProtectedConfig();
 
-/** Repo-relative path → the protection rule it matched, or null. */
+/** Repo-relative path/glob protection, from the user's config (empty by default). */
 function isProtectedRelative(rel: string): string | null {
   if (PROTECTED.files.has(rel)) return rel;
-  for (const re of PROTECTED.globs) {
-    if (re.test(rel)) return re.source;
-  }
+  for (const re of PROTECTED.globs) if (re.test(rel)) return re.source;
   return null;
 }
 
@@ -223,10 +205,9 @@ export function resolveSafeTarget(file: string): ResolvedTarget {
   const hit = isProtectedRelative(relPath);
   if (hit) {
     throw new Error(
-      `refused: ${relPath} is governance-protected (matched "${hit}"). ` +
-        `Only the repo owner may change it — ask, do not bypass. ` +
-        `(Configure the protected set via ATOMIC_EDIT_PROTECTED_FILES or ` +
-        `atomic-edit.protected.json at the repo root.)`,
+      `refused: ${relPath} is governance-protected (matches "${hit}" in your ` +
+        `atomic-edit.protected.json / ATOMIC_EDIT_PROTECTED_FILES). ` +
+        `Only the repo owner may change it — ask, do not bypass.`,
     );
   }
   return { absPath, relPath, repoRoot };
