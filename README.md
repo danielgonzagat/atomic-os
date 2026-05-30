@@ -6,7 +6,7 @@ every change is the smallest faithful mutation, proven character-by-character,
 validated before it's written, and reversible.**
 
 [![tools](https://img.shields.io/badge/tools-64-E85D30)](#what-you-get--64-tools)
-[![languages](https://img.shields.io/badge/structural%20edit-75%20languages-blue)](#the-universal-engine-75-languages)
+[![languages](https://img.shields.io/badge/structural%20edit-multi--language%20WASM-blue)](#the-universal-engine-multi-language-pure-wasm)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![smoke](https://img.shields.io/badge/smoke-11%2F11-success)](#verify-it-yourself)
 
@@ -39,7 +39,7 @@ Factory agent:                          Atomic OS:
   you must read the diff                  you validate by running the app
 ```
 
-It works across **75 languages**, edits **many files in one all-or-nothing
+It works across **many languages**, edits **many files in one all-or-nothing
 transaction**, and **refuses** any change that would break syntax or touch a file
 you marked protected. Nothing is written outside that firewall.
 
@@ -87,7 +87,7 @@ trivial file, a plain editor is just as fast. Atomic OS wins where it matters:
 # 1. clone + build (no network at runtime, no tsx/npx; compiles once to dist/)
 git clone https://github.com/danielgonzagat/atomic-os
 cd atomic-os
-npm install        # also pulls the optional universal engine (@oh-my-pi/pi-natives)
+npm install        # pulls web-tree-sitter + grammars (the self-contained universal engine; no native binary)
 npm run build      # compiles src/ -> src/dist/
 npm test           # 11/11 smoke: build + live handshake + a real firewall-guarded edit
 ```
@@ -123,7 +123,7 @@ Full setup, including the optional **deny-hook** that makes the atomic tools the
 | Group | Tools (highlights) | What it gives you |
 |---|---|---|
 | **Content/anchor editing** | `atomic_replace_at`, `atomic_locate`, `atomic_replace_text`, `atomic_replace_literal`, `atomic_edit` (unified router) | Edit by **what to find** (content / anchor), never by line/column. Kills coordinate-math and line-drift errors. |
-| **Universal structural (75 langs)** | `atomic_ast_search`, `atomic_ast_edit`, `atomic_ast_rewrite`, `atomic_rename_symbol_universal`, `atomic_outline`, `atomic_native_status` | ast-grep search/rewrite + scope-aware rename + tree-sitter outline, in **any** language. |
+| **Universal structural (multi-lang)** | `atomic_ast_search`, `atomic_ast_edit`, `atomic_ast_rewrite`, `atomic_rename_symbol_universal`, `atomic_outline`, `atomic_native_status` | ast-grep search/rewrite + scope-aware rename + tree-sitter outline, in **any** language. |
 | **Symbol & TS-semantic** | `atomic_edit_symbol`, `atomic_rename_symbol`, `atomic_rename_symbol_cross_file`, `atomic_add_import`, `atomic_remove_import`, `atomic_change_signature`, `atomic_add_decorator`, `atomic_add_await_to_call` | Type-aware, scope-correct refactors via ts-morph. |
 | **Multi-file & semantic apply** | `atomic_transaction`, `atomic_apply_workspace_edit` | One all-or-nothing transaction across many files; apply any **LSP WorkspaceEdit** through the firewall. |
 | **Read / search / outline** | `atomic_grep`, `atomic_glob`, `atomic_outline`, `code_browse`, `code_outline`, `code_read_symbol` | Native ripgrep/glob/tree-sitter — faster and more structured than shelling out. |
@@ -143,7 +143,7 @@ Every mutating tool, with **no exceptions**, goes through this exact sequence:
    in your protected set (else: refused).
 2. **`sha256` guard** — optional optimistic-concurrency check (refuse if the file
    changed under you).
-3. **`validate`** — the result is parsed (TS/JSON natively; 75 langs via
+3. **`validate`** — the result is parsed (TS/JSON natively; many langs via
    tree-sitter; structural-balance fallback). **A syntax-regressing edit is
    refused and never written.**
 4. **char-level trace** — exactly which characters changed, sha256 before/after,
@@ -159,17 +159,22 @@ didn't see."
 
 ---
 
-## The universal engine (75 languages)
+## The universal engine (multi-language, pure WASM)
 
-Structural search/edit/rename/outline across 75 languages is powered by the
-optional **[`@oh-my-pi/pi-natives`](https://www.npmjs.com/package/@oh-my-pi/pi-natives)**
-npm package (a native tree-sitter + ast-grep + ripgrep addon, prebuilt for
-darwin/linux/win). `npm install` pulls it automatically.
+Structural search/edit/rename/outline across many languages is powered by
+**[`web-tree-sitter`](https://www.npmjs.com/package/web-tree-sitter)** — the
+official tree-sitter compiled to WebAssembly — plus the canonical
+`tree-sitter-<lang>` grammar packages (Python, JavaScript, TypeScript/TSX, Go,
+Ruby, Rust, Java, C, C++, Bash, JSON today; drop in another grammar package to
+extend it). There is **no native binary and no PI dependency**: the engine is
+plain WASM that runs in-process on every platform, installed by an ordinary
+`npm install`. Because WASM is memory-safe it cannot crash the host, so there is
+no child-process fork — the engine is in-process, not an isolated worker.
 
-It is **optional and degrades cleanly**: on an unsupported platform, or if you
-skip it, the `atomic_ast_*` / `atomic_grep` / universal-rename tools report
-unavailable and **every TS/ts-morph tool keeps working fully**. The native engine
-is an accelerator, never on the critical path. Check with `atomic_native_status`.
+It **degrades cleanly**: if web-tree-sitter or a grammar fails to load, the
+`atomic_ast_*` / `atomic_grep` / universal-rename / `atomic_outline` tools report
+unavailable and **every TS/ts-morph tool keeps working fully**. Check with
+`atomic_native_status`.
 
 ---
 
@@ -230,8 +235,9 @@ npm test
 - Type-aware refactors (scope rename with types, signature changes) are deep on
   **TS/JS** (ts-morph); other languages get **syntactic** structural edits + tree-
   sitter scope, not full type resolution.
-- The universal engine needs a prebuilt platform binary (via the npm dep);
-  unsupported platforms fall back to the TS/structural path.
+- The universal engine is pure WASM (web-tree-sitter) — no native binary, runs
+  on every platform. Languages beyond the bundled grammar set are added by
+  installing the matching `tree-sitter-<lang>` package.
 
 ---
 
@@ -242,8 +248,7 @@ src/                     the MCP server (compiles to src/dist/)
   server.ts              entrypoint — registers all tool groups
   engine*.ts             the edit engine (apply, validate, zones, rename, universal)
   guard.ts               repo-containment + your protected-file config
-  native-bridge.ts       isolated fork client for the universal engine
-  native-worker.mjs      the child process that hosts pi-natives (forced dry-run)
+  native-bridge.ts       the universal engine — web-tree-sitter (WASM), in-process
   server-tools-*.ts      the 64 tools
   server-helpers-*.ts    the firewall (commit, multi-file, io, trace, verify)
   bypass-*.mjs           the bypass-rate meter (classify / observe / report)
