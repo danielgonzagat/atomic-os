@@ -1,8 +1,8 @@
 {
   "name": "atomic-os",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": false,
-  "description": "Atomic Operating System — a structured-read + atomic-edit MCP server that closes the Line-Oriented Action Bottleneck for AI CLI agents. Intention high, action minimal, proof clear, rollback possible, continuity persisted, product as the end.",
+  "description": "Atomic OS — a 64-tool structured-read + atomic-edit MCP that turns any AI CLI agent into a surgical, verifiable, universal (75-language) code engineer. Every mutation flows through a firewall: sha256 + syntax-validate + char-level trace + protected-file guard + rollback. Content/anchor-addressed editing (no line/column math), multi-file atomic transactions, LSP WorkspaceEdit apply, native ripgrep/glob/tree-sitter, and a bypass-rate meter.",
   "license": "MIT",
   "type": "commonjs",
   "bin": {
@@ -37,6 +37,15 @@
     "opencode",
     "codex",
     "structured-edit",
-    "ast"
-  ]
+    "ast",
+    "tree-sitter",
+    "ast-grep",
+    "universal-edit",
+    "firewall",
+    "rollback",
+    "75-languages"
+  ],
+  "optionalDependencies": {
+    "@oh-my-pi/pi-natives": "^15.5.13"
+  }
 }

@@ -9,3 +9,7 @@ docs/ai/traces/
 # Your own governance config (copy from atomic-edit.protected.example.json).
 # Tracked-or-not is your call; the example IS tracked as documentation.
 atomic-edit.protected.json
+
+# vendored native engine binaries (use the @oh-my-pi/pi-natives npm dep instead)
+src/vendor/pi-natives/*.node
+vendor/pi-natives/*.node
