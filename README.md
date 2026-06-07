@@ -323,11 +323,18 @@ Every mutation appends a tamper-evident, content-addressed trace to
 The `atomic` CLI reads that chain:
 
 ```bash
+atomic init [--force]           # detect the repo + generate plug-and-play governance config
 atomic verify [<opId>|--head]   # recompute the chain hash + check the file is still in the recorded state
 atomic explain <opId>           # intention, proof/audit block, char diff, gate verdict — human-readable
 atomic log [-n N]               # walk the proof chain, newest -> oldest
 atomic compare                  # run AtomicBench (atomic vs line/file rewrite)
 ```
+
+`atomic init` detects your languages, package manager, test command, and CI, then
+writes `atomic-edit.protected.json` (sane defaults: lockfiles, `.env*`, keys,
+`.github/workflows`) + `atomic.agent-rules.md` (the operating law: atomic-only
+edits, byte-positivity, validate-by-product) + prints the MCP config snippet — so
+any repo is governed in one command.
 
 `verify` recomputes the **same** hash the engine wrote — tamper with the parent
 pointer, the after-content, or the admitting gate verdict and it stops matching.

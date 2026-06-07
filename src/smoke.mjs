@@ -103,5 +103,13 @@ check('atomic verify --head recomputes the chain (VERIFIED)', v.status === 0 && 
 const lg = cli(['log']);
 check('atomic log walks the proof chain', /proof chain @/.test(lg.stdout) && /atomic_/.test(lg.stdout));
 
+// governance installer: `atomic init` detects a repo + generates config
+const initDir = fs.mkdtempSync(path.join(os.tmpdir(), 'atomic-init-'));
+fs.writeFileSync(path.join(initDir, 'a.py'), 'def f():\n    return 1\n');
+const ini = spawnSync(process.execPath, [path.join(dir, 'atomic-cli.mjs'), 'init'], { cwd: initDir, encoding: 'utf8' });
+check('atomic init generates governance config', ini.status === 0 &&
+  fs.existsSync(path.join(initDir, 'atomic-edit.protected.json')) &&
+  fs.existsSync(path.join(initDir, 'atomic.agent-rules.md')));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail > 0 ? 1 : 0);
