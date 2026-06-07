@@ -57,7 +57,7 @@ for (const t of ['atomic_edit', 'atomic_replace_at', 'atomic_ast_edit', 'atomic_
 }
 
 // real firewall-guarded edit: content-addressed, no coordinates
-const ed = await rpc(3, 'tools/call', { name: 'atomic_replace_at', arguments: { file: 'm.py', mode: 'content', anchor: 'greet', newText: 'salute', occurrence: 1 } });
+const ed = await rpc(3, 'tools/call', { name: 'atomic_replace_at', arguments: { file: 'm.py', mode: 'content', anchor: 'greet', newText: 'salute', occurrence: 1, proofOfIncorrectness: 'placeholder verb "greet" is incorrect for this API; the contract specifies "salute" as the canonical function name.' } });
 check('atomic_replace_at applied', txt(ed).includes('Atomic edit applied'));
 const after = fs.readFileSync(path.join(work, 'm.py'), 'utf8');
 check('edit persisted (greet->salute)', after.includes('def salute(n)'));
@@ -75,7 +75,7 @@ const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/;
 const beginR = await rpc(5, 'tools/call', { name: 'atomic_session_begin', arguments: {} });
 const sid = (txt(beginR).match(UUID) ?? [])[0];
 check('atomic_session_begin returns a session id', !!sid);
-await rpc(6, 'tools/call', { name: 'atomic_replace_at', arguments: { file: 'm.py', mode: 'content', anchor: 'salute', newText: 'hail', occurrence: 1 } });
+await rpc(6, 'tools/call', { name: 'atomic_replace_at', arguments: { file: 'm.py', mode: 'content', anchor: 'salute', newText: 'hail', occurrence: 1, proofOfIncorrectness: 'verb "salute" is corrected to "hail" to exercise a negative-byte edit under proof inside the session window.' } });
 check('edit inside session applied (salute->hail)', fs.readFileSync(path.join(work, 'm.py'), 'utf8').includes('def hail(n)'));
 await rpc(7, 'tools/call', { name: 'atomic_session_rollback', arguments: { sessionId: sid, close: true } });
 const restored = fs.readFileSync(path.join(work, 'm.py'), 'utf8');
@@ -83,7 +83,7 @@ check('atomic_session_rollback restored the window (hail->salute)', restored.inc
 // begin -> edit -> commit must KEEP the edit and close the window
 const begin2 = await rpc(8, 'tools/call', { name: 'atomic_session_begin', arguments: {} });
 const sid2 = (txt(begin2).match(UUID) ?? [])[0];
-await rpc(9, 'tools/call', { name: 'atomic_replace_at', arguments: { file: 'm.py', mode: 'content', anchor: 'salute', newText: 'hail', occurrence: 1 } });
+await rpc(9, 'tools/call', { name: 'atomic_replace_at', arguments: { file: 'm.py', mode: 'content', anchor: 'salute', newText: 'hail', occurrence: 1, proofOfIncorrectness: 'verb "salute" is corrected to "hail" to exercise a negative-byte edit under proof inside the session window.' } });
 const cm = await rpc(10, 'tools/call', { name: 'atomic_session_commit', arguments: { sessionId: sid2 } });
 check('atomic_session_commit kept the edit (salute->hail)', fs.readFileSync(path.join(work, 'm.py'), 'utf8').includes('def hail(n)'));
 check('atomic_session_commit emitted a receipt', /session|commit/i.test(txt(cm)));

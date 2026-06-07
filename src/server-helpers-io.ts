@@ -1,7 +1,23 @@
+import * as childProcess from "node:child_process";
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { resolveAllowedRootForAbsolutePath, REPO_ROOT } from './guard.js';
+import { checkConnectionByteFloor, checkSupplyChainByteFloor, pendingWriteCount } from './connection-gate.js';
+// Full-gate byte floor. The async WRITE_GATES (contract-edge, render-conformance,
+// binding, telemetry-emission, findings-delta, supply-chain) pull the tree-sitter
+// engine and are enforced ahead of every write in convergeStatic. To keep this
+// leaf module engine-free AND keep atomicWrite synchronous (its sync contract is
+// load-bearing across every write helper), the floor runs the SYNC WRITE_GATES
+// in-process: type-soundness (a NEW tsc error — incl. an unresolved reference
+// TS2304/TS2305/TS2552, the dead-wire fact), iac-reference (a dangling infra
+// reference), and security (a NEW hardcoded secret). Each is pure in-process
+// (typescript / fs+path / regex+entropy) — no engine, no spawn.
+import typeSoundnessGate from './gates/type-soundness-gate.js';
+import iacReferenceGate from './gates/iac-reference-gate.js';
+import securityGate from './gates/security-gate.js';
+import { makeContext, type GateModule } from './gates/contract.js';
+import { assertSelfExpansionAdmission } from './server-helpers-self-expansion.js';
 
 export const sha256 = (s: string): string => crypto.createHash('sha256').update(s).digest('hex');
 
@@ -21,18 +37,200 @@ export const log = (...a: unknown[]): void => {
   process.stderr.write(`[atomic-edit] ${a.map(String).join(' ')}\n`);
 };
 
+/** The SYNC subset of WRITE_GATES safe to run at the byte floor (no engine, no spawn). */
+const SYNC_WRITE_GATES: GateModule[] = [typeSoundnessGate, iacReferenceGate, securityGate];
+
+/**
+ * Run the sync WRITE_GATES over a single-file overlay at the byte floor and return
+ * each gate's RED loci (gate+locus+fact), never throwing on its behalf. Honesty
+ * doctrine, mirrored from runGates: a gate whose `run` returns a thenable (an async
+ * gate) is NOT awaited here — it is carried as UNJUDGED unless the caller is in a
+ * multi-file write set that will be judged by convergeStatic. A concrete sync RED
+ * blocks, and UNJUDGED also blocks at this strict byte floor because it is not
+ * green approval.
+ */
+function runSyncWriteGatesAt(relPath: string, content: string): {
+  reds: { gate: string; locus: string; fact: string }[];
+  unjudged: { gate: string; fact: string }[];
+} {
+  const overlay = new Map<string, string>([[relPath, content]]);
+  const ctx = makeContext(REPO_ROOT, overlay, [relPath]);
+  const reds: { gate: string; locus: string; fact: string }[] = [];
+  const unjudged: { gate: string; fact: string }[] = [];
+  for (const g of SYNC_WRITE_GATES) {
+    if (!g.appliesTo(relPath)) continue;
+    let res: ReturnType<typeof g.run>;
+    try {
+      res = g.run(ctx);
+    } catch (e) {
+      unjudged.push({ gate: g.name, fact: `threw: ${e instanceof Error ? e.message : String(e)}` });
+      continue;
+    }
+    // An async gate returns a Promise: it cannot be judged synchronously here.
+    // In strict byte-floor admission that is not approval, so it blocks unless
+    // the caller has registered a multi-file set that will be judged as a whole.
+    if (res instanceof Promise || typeof (res as { then?: unknown }).then === 'function') {
+      unjudged.push({ gate: g.name, fact: 'async gate cannot be judged at the sync byte floor' });
+      continue;
+    }
+    if (res.unjudged) {
+      unjudged.push({ gate: res.gate, fact: res.note ?? 'gate could not decide from the available bytes' });
+      continue;
+    }
+    for (const r of res.reds) reds.push({ gate: res.gate, locus: r.locus ?? r.file, fact: r.fact });
+  }
+  return { reds, unjudged };
+}
+
 /** Atomic durable write: temp file in same dir, fsync, rename. */
-export function atomicWrite(absPath: string, content: string): void {
-  const dir = path.dirname(absPath);
-  const tmp = path.join(dir, `.atomic-edit.${process.pid}.${Date.now()}.tmp`);
-  const fd = fs.openSync(tmp, 'w');
+function brokerSocketPath(): string | null {
+  return process.env.ATOMIC_EXEC_BROKER_SOCKET || null;
+}
+
+function canUseBrokerAtomicWrite(error: unknown): boolean {
+  const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code?: unknown }).code ?? "") : "";
+  return Boolean(brokerSocketPath()) && (code === "EPERM" || code === "EACCES");
+}
+
+function writeAtomicBytesDirect(absPath: string, tmp: string, content: string, mode: number | undefined): void {
+  const fd = fs.openSync(tmp, "w");
   try {
     fs.writeSync(fd, content);
     fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);
   }
+  if (mode !== undefined) fs.chmodSync(tmp, mode);
   fs.renameSync(tmp, absPath);
+}
+
+function writeAtomicBytesViaBroker(absPath: string, tmp: string, content: string, mode: number | undefined): void {
+  const socket = brokerSocketPath();
+  if (!socket) throw new Error("atomicWrite broker fallback unavailable: ATOMIC_EXEC_BROKER_SOCKET is unset");
+  const helper = path.join(REPO_ROOT, "scripts/mcp/atomic-edit/atomic-write-broker.mjs");
+  const req = {
+    command: `${shellPath(process.execPath)} ${shellPath(helper)}`,
+    cwd: path.dirname(absPath),
+    effectRoot: path.dirname(absPath),
+    timeoutMs: 120000,
+    env: {
+      ATOMIC_WRITE_TARGET: absPath,
+      ATOMIC_WRITE_TMP: tmp,
+      ...(mode === undefined ? {} : { ATOMIC_WRITE_MODE: String(mode) }),
+    },
+    stdin: content,
+  };
+  const client = path.join(REPO_ROOT, "scripts/mcp/atomic-edit/atomic-exec-broker-client.mjs");
+  const res = childProcess.spawnSync(process.execPath, [client, socket], {
+    cwd: path.dirname(absPath),
+    encoding: "utf8",
+    input: JSON.stringify(req),
+    maxBuffer: 32 * 1024 * 1024,
+    timeout: 125000,
+  });
+  if (res.error) throw res.error;
+  let reply: Record<string, unknown>;
+  try {
+    reply = JSON.parse(res.stdout || "{}") as Record<string, unknown>;
+  } catch {
+    throw new Error(`atomicWrite broker fallback returned unparseable output: ${String(res.stdout).slice(0, 300)}`);
+  }
+  if (reply.ok !== true) {
+    throw new Error(`atomicWrite broker fallback failed: ${String(reply.error ?? reply.stderr ?? res.stderr ?? "unknown broker failure")}`);
+  }
+}
+
+export function atomicWrite(absPath: string, content: string): void {
+  // ── Inescapable convergence, at the byte floor — immutable by architecture ──
+  // EVERY write, through EVERY tool, funnels through here. A source file that
+  // would INTRODUCE a dangling relative import, a dangling dependency, a NEW tsc
+  // error / unresolved reference, a dangling infra reference, or a NEW hardcoded
+  // secret never reaches disk. There is no env, no flag, no toggle, and no code
+  // path that writes around this — that is the point: the agent can only persist a
+  // connected, type-sound, secret-free tree.
+  // (The async edge/render/binding/telemetry/findings gates run ahead of every
+  // write in convergeStatic; the sync rungs of that same WRITE_GATES set run HERE.)
+  const conn = checkConnectionByteFloor(absPath, content);
+  if (!conn.green) {
+    throw new Error(
+      `refused (convergence): this write would introduce dangling relative import(s) — ` +
+        `${conn.reds.slice(0, 5).join(', ')}. A wire that resolves to nothing is not a change. ` +
+        `Create the target first, or commit the set together (atomic_converge / a transaction). NOT written.`,
+    );
+  }
+  // Dependency twin of the connection gate, also at the byte floor: a NEW bare
+  // import to a package absent from the installed tree is a dangling wire too.
+  // supply-chain is sync (fs walk); if it ever returns async, skip here (atomic_converge
+  // still covers it) rather than block on a half-resolved promise.
+  const sc = checkSupplyChainByteFloor(absPath, content);
+  if (!sc.green) {
+    throw new Error(
+      `refused (convergence): this write would introduce a dangling dependency — ` +
+        `${sc.reds.slice(0, 5).join(', ')}. Install the package or fix the import. NOT written.`,
+    );
+  }
+  // ── full-gate byte floor: the SYNC WRITE_GATES, in-process, before the byte lands ──
+  // Connection + supply-chain (above) prove every wire RESOLVES. These prove the write
+  // is TYPE-SOUND, its infra references RESOLVE, and it introduces NO hardcoded secret —
+  // so atomic_edit / atomic_rename_symbol / atomic_replace_text (which reach disk through
+  // here, NOT through convergeStatic) can no longer land a NEW tsc error / unresolved
+  // reference / dangling IaC ref / committed credential. The async edge/render/binding
+  // gates are enforced in convergeStatic ahead of every write; here we add the sync rungs
+  // that close the per-edit gap without the engine and without breaking the sync contract.
+  //
+  // Multi-file pending set: a per-file in-memory compile cannot see the sibling candidates
+  // of an A→B set (it would falsely red A's import of a not-yet-written B). When a set is in
+  // flight (pendingWriteCount > 1) type-soundness is honestly deferred to convergeStatic,
+  // which type-checks the full overlay. Single-file writes (count ≤ 1) run all sync gates.
+  const relPath = path.relative(REPO_ROOT, absPath);
+  assertSelfExpansionAdmission(REPO_ROOT, absPath, content);
+  const multiFileInFlight = pendingWriteCount() > 1;
+  const syncVerdict = runSyncWriteGatesAt(relPath, content);
+  for (const r of syncVerdict.reds) {
+    if (multiFileInFlight && r.gate === 'type-soundness') continue; // sibling-blind → defer to converge
+    throw new Error(
+      `refused (convergence): this write would introduce a ${r.gate} red — ` +
+        `${relPath}${r.locus ? `:${r.locus}` : ''} — ${r.fact}. ` +
+        `A write that does not converge green is not a change. NOT written.`,
+    );
+  }
+  for (const r of syncVerdict.unjudged) {
+    if (multiFileInFlight && r.gate === 'type-soundness') continue; // sibling-blind → defer to converge
+    throw new Error(
+      `refused (convergence): ${r.gate} was UNJUDGED for ${relPath} — ${r.fact}. ` +
+        `Unjudged is not green approval under Y admission. NOT written.`,
+    );
+  }
+
+  const dir = path.dirname(absPath);
+  const tmp = path.join(dir, `.atomic-edit.${process.pid}.${Date.now()}.tmp`);
+  // Preserve the original file's mode: a temp-file + rename replaces the inode,
+  // so without this an existing executable file (e.g. 755) silently drops to the
+  // umask default (644) on the next atomic write. Capture it before writing.
+  let mode: number | undefined;
+  try {
+    mode = fs.statSync(absPath).mode & 0o777;
+  } catch {
+    /* new file (ENOENT) or unstatable: no prior mode to preserve — umask applies */
+  }
+  try {
+    writeAtomicBytesDirect(absPath, tmp, content, mode);
+  } catch (e) {
+    // On ANY direct write failure (ENOSPC on write, EPERM on chmod, EXDEV/ENOENT on rename)
+    // never leave the temp beside the source. If the current host process is
+    // read-only but has an atomic_exec broker, retry the same byte write inside
+    // the per-command broker sandbox after all convergence gates have passed.
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      /* best-effort cleanup */
+    }
+    if (canUseBrokerAtomicWrite(e)) {
+      writeAtomicBytesViaBroker(absPath, tmp, content, mode);
+      return;
+    }
+    throw e;
+  }
 }
 
 export function readUtf8(absPath: string): string {
@@ -184,4 +382,3 @@ export function nearestPackageRelPath(repoRoot: string, relPath: string): string
   }
   return null;
 }
-

@@ -27,6 +27,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { REPO_ROOT } from './guard.js';
 import { buildFounderBlock, type FounderBlock } from './founder.js';
+import { type RegistryRun } from './gates/registry.js';
+import { removedByteCountBetween, type NegativeActionProof } from './server-helpers-negative-proof.js';
 
 export type Verbosity = 'L0' | 'L1' | 'L2' | 'L3';
 
@@ -103,6 +105,15 @@ export interface ModifiedZone {
   metadata?: Record<string, unknown>;
 }
 
+export interface ByteEffect {
+  beforeBytes: number;
+  proposedBytes: number;
+  currentAfterBytes: number;
+  removedBytes: number;
+  addedBytes: number;
+  netBytes: number;
+}
+
 export interface MovementZone {
   kind: string;
   description: string;
@@ -135,6 +146,8 @@ export interface AtomicEditTrace {
   intention: string;
   fallback: boolean;
   metrics: TraceMetrics;
+  /** Byte-level effect receipt over UTF-8 bytes, independent of JS string length. */
+  byteEffect: ByteEffect;
   validation: { language: string; syntaxErrorsBefore: number; syntaxErrorsAfter: number };
   /** True when the operator only validated a proposal and did not write the file. */
   preview: boolean;
@@ -150,8 +163,21 @@ export interface AtomicEditTrace {
   modifiedZones: ModifiedZone[];
   movementZones: MovementZone[];
   semanticImpact: string;
+  /** Admission proof required before any negative byte effect may touch disk. */
+  negativeActionProof?: NegativeActionProof;
   /** Auditability-without-code layer (thesis apex). */
   audit: FounderBlock;
+  /**
+   * Proof-chained ledger fields. The trace store is a content-addressed,
+   * append-only chain: each op points at the prior chain head and binds the
+   * gate verdict that admitted the write.
+   */
+  /** chainHash of the prior trace at write time (.atomic/HEAD before this op). '' = genesis. */
+  parentSha256: string;
+  /** The convergence verdict (gate run) that admitted this write — converge persists its proof, never throws it away. */
+  gateVerdict?: RegistryRun;
+  /** sha256(parentSha256 ‖ afterSha256 ‖ canonicalJSON(gateVerdict)). The tamper-evident link; becomes the next .atomic/HEAD. */
+  chainHash: string;
 }
 
 export function newOperationId(): string {
@@ -159,6 +185,47 @@ export function newOperationId(): string {
 }
 
 const sha256 = (s: string): string => crypto.createHash('sha256').update(s).digest('hex');
+
+/**
+ * Deterministic JSON: object keys are emitted in sorted order at every depth so
+ * the chain hash is stable regardless of insertion order. Arrays keep order
+ * (order is semantic for the gate run). undefined → null so the shape is total.
+ */
+export function canonicalJSON(value: unknown): string {
+  const norm = (v: unknown): unknown => {
+    if (v === null || v === undefined) return null;
+    if (Array.isArray(v)) return v.map(norm);
+    if (typeof v === 'object') {
+      const out: Record<string, unknown> = {};
+      for (const k of Object.keys(v as Record<string, unknown>).sort()) {
+        out[k] = norm((v as Record<string, unknown>)[k]);
+      }
+      return out;
+    }
+    return v;
+  };
+  return JSON.stringify(norm(value));
+}
+
+/**
+ * The tamper-evident link of the proof chain:
+ *   chainHash = sha256(parentSha256 ‖ afterSha256 ‖ canonicalJSON(gateVerdict))
+ * Tamper with ANY of the three (re-point the parent, swap the after-content, or
+ * edit the admitting gate verdict) and the recomputed hash no longer matches the
+ * child's parent pointer. Exported so an auditor (and the proof) can re-derive it.
+ */
+export function chainHashOf(
+  parentSha256: string,
+  afterSha256: string,
+  gateVerdict: RegistryRun | undefined,
+): string {
+  return sha256(`${parentSha256}‖${afterSha256}‖${canonicalJSON(gateVerdict)}`);
+}
+
+/** Absolute path to the chain-head marker (.atomic/HEAD) for a given trace's repo. */
+function headPathFor(trace: AtomicEditTrace): string {
+  return path.join(traceRepoRoot(trace), '.atomic', 'HEAD');
+}
 
 /** Build a trace from what every mutation site already has in hand. */
 export function buildTrace(args: {
@@ -178,6 +245,9 @@ export function buildTrace(args: {
   semanticImpact?: string;
   preview?: boolean;
   changed?: boolean;
+  /** The convergence verdict that admitted this write (converge passes conv.gates); omitted by plain edits. */
+  gateVerdict?: RegistryRun;
+  negativeActionProof?: NegativeActionProof;
 }): AtomicEditTrace {
   const changed = args.metrics?.changedChars ?? 0;
   const surface = args.metrics?.lineRewriteSurfaceChars ?? 0;
@@ -190,6 +260,17 @@ export function buildTrace(args: {
   const preview = args.preview ?? false;
   const changedFlag = args.changed ?? !preview;
   const afterText = changedFlag ? args.newText : args.before;
+  const beforeBytes = Buffer.byteLength(args.before, 'utf8');
+  const proposedBytes = Buffer.byteLength(args.newText, 'utf8');
+  const currentAfterBytes = Buffer.byteLength(afterText, 'utf8');
+  const byteEffect: ByteEffect = {
+    beforeBytes,
+    proposedBytes,
+    currentAfterBytes,
+    removedBytes: removedByteCountBetween(args.before, args.newText),
+    addedBytes: removedByteCountBetween(args.newText, args.before),
+    netBytes: proposedBytes - beforeBytes,
+  };
   return {
     traceVersion: '1.0',
     operationId: newOperationId(),
@@ -205,9 +286,10 @@ export function buildTrace(args: {
       changedChars: changed,
       lineRewriteSurfaceChars: surface,
       expansionFactorAvoided: expansion,
-      bytesNet: args.metrics?.bytesNet ?? args.newText.length - args.before.length,
+      bytesNet: args.metrics?.bytesNet ?? byteEffect.netBytes,
       lineRewriteAvoided: args.metrics?.lineRewriteAvoided ?? derivedLineRewriteAvoided,
     },
+    byteEffect,
     validation: {
       language: args.validation.language,
       syntaxErrorsBefore: args.validation.before,
@@ -228,8 +310,8 @@ export function buildTrace(args: {
       {
         kind: 'unchanged_context',
         byteStart: 0,
-        byteEnd: args.before.length,
-        byteLength: args.before.length,
+        byteEnd: Buffer.byteLength(args.before, 'utf8'),
+        byteLength: Buffer.byteLength(args.before, 'utf8'),
         description:
           'Everything outside the modified zone is preserved byte-for-byte by the atomic operation.',
       },
@@ -238,8 +320,8 @@ export function buildTrace(args: {
       {
         kind: 'changed_span',
         byteStart: 0,
-        byteEnd: args.before.length,
-        newByteLength: args.newText.length,
+        byteEnd: Buffer.byteLength(args.before, 'utf8'),
+        newByteLength: Buffer.byteLength(args.newText, 'utf8'),
         oldTextHash: sha256(args.before),
         newTextHash: sha256(args.newText),
         description: preview
@@ -249,6 +331,7 @@ export function buildTrace(args: {
     ],
     movementZones: args.movementZones ?? [],
     semanticImpact: args.semanticImpact ?? 'unclassified_code_edit',
+    negativeActionProof: args.negativeActionProof,
     audit: buildFounderBlock({
       file: args.file,
       operator: args.operator,
@@ -258,6 +341,11 @@ export function buildTrace(args: {
       changedChars: changed,
       expansionFactor: expansion,
     }),
+    // Chain fields: parent + chainHash are computed at write time (they depend on
+    // .atomic/HEAD), so buildTrace leaves them empty and writeTrace finalizes them.
+    parentSha256: '',
+    gateVerdict: args.gateVerdict,
+    chainHash: '',
   };
 }
 
@@ -276,16 +364,37 @@ function traceDirFor(trace: AtomicEditTrace): string {
 export function writeTrace(trace: AtomicEditTrace): {
   tracePath?: string;
   traceWriteError?: string;
+  chainHash?: string;
 } {
   try {
     const repoRoot = traceRepoRoot(trace);
     const traceDir = traceDirFor(trace);
     fs.mkdirSync(traceDir, { recursive: true });
+
+    // ── proof chain: read the prior head, link this op to it, advance the head ──
+    const headPath = headPathFor(trace);
+    let parent = '';
+    try {
+      parent = fs.readFileSync(headPath, 'utf8').trim();
+    } catch {
+      parent = ''; // genesis: no prior head yet
+    }
+    trace.parentSha256 = parent;
+    trace.chainHash = chainHashOf(parent, trace.afterSha256, trace.gateVerdict);
+
     const abs = path.join(traceDir, `${trace.operationId}.json`);
     const tmp = `${abs}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(trace, null, 2));
     fs.renameSync(tmp, abs);
-    return { tracePath: path.relative(repoRoot, abs) };
+
+    // Advance .atomic/HEAD to this chainHash via the same temp+rename idiom so a
+    // crash never leaves a half-written head. A failed head write must NOT corrupt
+    // the chain silently — surface it, but the trace itself is already persisted.
+    const headTmp = `${headPath}.tmp`;
+    fs.writeFileSync(headTmp, trace.chainHash);
+    fs.renameSync(headTmp, headPath);
+
+    return { tracePath: path.relative(repoRoot, abs), chainHash: trace.chainHash };
   } catch (e) {
     return { traceWriteError: e instanceof Error ? e.message : String(e) };
   }

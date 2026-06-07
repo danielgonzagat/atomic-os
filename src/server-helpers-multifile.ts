@@ -22,6 +22,9 @@ import { readUtf8, atomicWrite, log } from './server-helpers-io.js';
 import { buildTrace, writeTrace } from './trace.js';
 import { characterDiff } from './advanced.js';
 import { ok, fail, type ToolOk } from './server-helpers-result.js';
+import { requireNegativeActionProof, removedByteCountBetween } from './server-helpers-negative-proof.js';
+import { registerPendingWrites, clearPendingWrites } from './connection-gate.js';
+import * as path from 'node:path';
 
 export interface MultiFileEntry {
   /** repo-relative path */
@@ -47,6 +50,7 @@ export function applyMultiFilePlan(
   plan: MultiFileEntry[],
   operator: string,
   preview: boolean,
+  proofOfIncorrectness?: string,
 ): ToolOk {
   if (plan.length === 0) return fail('empty plan: no files to edit');
 
@@ -67,6 +71,21 @@ export function applyMultiFilePlan(
     staged.push({ relPath, absPath, repoRoot, before, result });
   }
   if (staged.length === 0) return ok({ ok: true, changed: false, note: 'plan produced no edits' });
+
+  const changedStaged = staged.filter((s) => s.result.newText !== s.before);
+  const removedByteCount = changedStaged.reduce(
+    (total, s) => total + removedByteCountBetween(s.before, s.result.newText),
+    0,
+  );
+  const negativeActionProof = preview || removedByteCount <= 0
+    ? undefined
+    : requireNegativeActionProof({
+        action: operator,
+        target: changedStaged.map((s) => s.relPath).join(', '),
+        targetUnit: 'multi-file-plan',
+        removedByteCount,
+        proofOfIncorrectness,
+      });
 
   const traces = staged.map((s) => ({
     file: s.relPath,
@@ -91,6 +110,9 @@ export function applyMultiFilePlan(
       preservedZones: computeZones(s.before, s.result.newText).preservedZones,
       modifiedZones: computeZones(s.before, s.result.newText).modifiedZones,
       movementZones: [],
+      preview,
+      changed: !preview && s.result.newText !== s.before,
+      negativeActionProof,
     }),
   }));
 
@@ -133,6 +155,9 @@ export function applyMultiFilePlan(
 
   // Phase 2 — write all; roll back written files if any write throws.
   const written: { absPath: string; before: string }[] = [];
+  // The transaction is one atomic set: register every target as pending so the
+  // byte-floor connection gate judges the set as a whole, not file-by-file.
+  registerPendingWrites(staged.map((s) => s.absPath));
   try {
     for (const s of staged) {
       if (s.result.newText === s.before) continue;
@@ -151,6 +176,8 @@ export function applyMultiFilePlan(
       `transaction write failed; rolled back ${written.length} file(s): ` +
         (writeErr instanceof Error ? writeErr.message : String(writeErr)),
     );
+  } finally {
+    clearPendingWrites();
   }
 
   const traceRefs: string[] = [];
@@ -173,5 +200,79 @@ export function applyMultiFilePlan(
     changed: true,
     filesWritten: written.length,
     files,
+    ...(negativeActionProof ? { negativeActionProof } : {}),
   });
+}
+
+/**
+ * Write a set of WHOLE-FILE replacements (rel -> newContent) with rollback +
+ * one trace per file. For callers (cross-file rename) that already computed full
+ * file contents rather than ranged edits, and that already validated the plan
+ * all-or-nothing. On a mid-loop write failure it restores every already-written
+ * file (best-effort) and throws. Returns the persisted trace paths.
+ */
+export function writeWholeFilePlan(
+  repoRoot: string,
+  changes: Iterable<[string, string]>,
+  operator: string,
+): string[] {
+  const entries = [...changes].map(([rel, after]) => {
+    const absPath = path.join(repoRoot, rel);
+    return { rel, absPath, before: readUtf8(absPath), after };
+  });
+  const written: { absPath: string; before: string }[] = [];
+  // Cross-file plan is one atomic set: register every target as pending so the
+  // byte-floor connection gate sees the whole set (rewired paths resolve together).
+  registerPendingWrites(entries.map((e) => e.absPath));
+  try {
+    for (const e of entries) {
+      if (e.after === e.before) continue;
+      atomicWrite(e.absPath, e.after);
+      written.push({ absPath: e.absPath, before: e.before });
+    }
+  } catch (writeErr) {
+    for (const w of written.reverse()) {
+      try {
+        atomicWrite(w.absPath, w.before);
+      } catch {
+        /* best-effort rollback */
+      }
+    }
+    throw new Error(
+      `cross-file write failed; rolled back ${written.length} file(s): ` +
+        (writeErr instanceof Error ? writeErr.message : String(writeErr)),
+    );
+  } finally {
+    clearPendingWrites();
+  }
+  const traceRefs: string[] = [];
+  for (const e of entries) {
+    if (e.after === e.before) continue;
+    try {
+      const zones = computeZones(e.before, e.after);
+      const trace = buildTrace({
+        file: e.rel,
+        repoRoot,
+        operator,
+        before: e.before,
+        newText: e.after,
+        inlinePreview: characterDiff(e.before, e.after, e.rel),
+        validation: { language: 'ts', before: 0, after: 0 },
+        metrics: {
+          changedChars: 0,
+          lineRewriteSurfaceChars: 0,
+          expansionFactorAvoided: 1,
+          bytesNet: e.after.length - e.before.length,
+        },
+        preservedZones: zones.preservedZones,
+        modifiedZones: zones.modifiedZones,
+        movementZones: [],
+      });
+      const persisted = writeTrace(trace);
+      if (persisted.tracePath) traceRefs.push(persisted.tracePath);
+    } catch {
+      /* trace is best-effort */
+    }
+  }
+  return traceRefs;
 }

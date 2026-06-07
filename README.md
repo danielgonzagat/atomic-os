@@ -3,12 +3,18 @@
 **An MCP server that turns any AI CLI agent (Claude Code, OpenCode, Codex) from a
 blunt text editor into a surgical, verifiable, universal code engineer — where
 every change is the smallest faithful mutation, proven character-by-character,
-validated before it's written, and reversible.**
+validated before it's written, reversible, and where destroying correct bytes
+requires a written proof.**
 
-[![tools](https://img.shields.io/badge/tools-68-E85D30)](#what-you-get--68-tools)
+[![tools](https://img.shields.io/badge/tools-83-E85D30)](#what-you-get--83-tools)
 [![languages](https://img.shields.io/badge/structural%20edit-multi--language%20WASM-blue)](#the-universal-engine-multi-language-pure-wasm)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![smoke](https://img.shields.io/badge/smoke-20%2F20-success)](#verify-it-yourself)
+
+> This is the **complete** Atomic OS — the full engine we run in production,
+> generalized for any repo: 83 tools, the universal multi-language engine, the
+> write firewall, transactional sessions, guarded command execution, the
+> byte-positivity law, and the proof/convergence governance layer.
 
 ---
 
@@ -30,7 +36,7 @@ Atomic OS fixes the **action layer**. The agent now:
 5. **validates** the result actually parses before writing it,
 6. records a **trace** so another session can continue,
 7. lets you **roll back** (per edit, or a whole multi-edit **session**), and
-8. lets you validate by the **product behaving**, not by reading the diff.
+8. cannot **destroy correct bytes** without first stating *why* they were wrong.
 
 ```
 Factory agent:                          Atomic OS:
@@ -41,8 +47,9 @@ Factory agent:                          Atomic OS:
 
 It works across **many languages**, edits **many files in one all-or-nothing
 transaction**, opens **named transactional sessions** you can roll back as a unit,
-and **refuses** any change that would break syntax or touch a file you marked
-protected. Nothing is written outside that firewall.
+runs **guarded commands** (git/tests) inside the same trace envelope, and
+**refuses** any change that would break syntax, escape the repo, or touch a file
+you marked protected. Nothing is written outside that firewall.
 
 ---
 
@@ -57,7 +64,7 @@ on a different, underexploited thesis:
 > risky mutations.
 
 So this is **not** a smarter model. It's a **verified action substrate** that any
-model plugs into. Four things make it genuinely ahead of the factory editor —
+model plugs into. Five things make it genuinely ahead of the factory editor —
 not hype, things you can run and check:
 
 - **The firewall is a law, not a convention.** Every mutation flows through
@@ -65,16 +72,20 @@ not hype, things you can run and check:
   rollback`. The universal engine is forced to *dry-run*, so it **physically
   cannot write** — only the firewall writes. A bad edit is **refused**, not
   written-then-regretted.
+- **Byte-positivity (no-bypass).** Bytes that already exist are treated as
+  *correct-by-construction*: an edit that **removes or overwrites** them is a
+  *negative action* and is **refused unless you supply a written
+  `proofOfIncorrectness`** (≥20 chars) explaining why those bytes are wrong.
+  Additive, correctness-increasing edits flow freely. This makes "the agent
+  quietly deleted my code" structurally impossible. (See the law below.)
 - **Universal, by the right architecture.** Structural edit/search across **11
   first-class tree-sitter grammars** (Python, JS, TS/TSX, Go, Ruby, Rust, Java,
   C, C++, Bash, JSON) via a native tree-sitter/ast-grep engine — not a
-  per-language catalog. One core, pluggable perception; drop in any
-  `tree-sitter-<lang>` package to add another, and non-grammar files degrade
-  cleanly to byte/range-validated edits.
+  per-language catalog. Non-grammar files degrade cleanly to byte/range-validated
+  edits; drop in any `tree-sitter-<lang>` package to add a language.
 - **The coarse editor is banned for code.** The optional deny-hook makes the
-  atomic tools the *only* way to touch code — the blunt full-file/whole-line
-  text editor (and any raw `sed`/overwrite) is refused for source. Editing stops
-  being "rewrite and hope" and becomes "name the smallest faithful change."
+  atomic tools the *only* way to touch code — the blunt full-file/whole-line text
+  editor (and any raw `sed`/overwrite) is refused for source.
 - **Dominance is measurable.** A built-in **bypass-rate meter** counts every time
   the agent reaches for raw Bash/Edit when an atomic tool existed — so "better
   than the factory editor" is a number you drive toward zero, not a slogan.
@@ -82,10 +93,42 @@ not hype, things you can run and check:
 **What it is NOT** (because lying would defeat the point): it does not make the
 model smarter; on novel reasoning it's at parity with mainstream tools. The
 components (tree-sitter, ast-grep, ts-morph, ripgrep, LSP) are existing tech — the
-revolution is the **principle + the firewall + the relentless discipline of
-proving every step**, not inventing the parts. On a one-character change in a
-trivial file, a plain editor is just as fast. Atomic OS wins where it matters:
-**structure, safety, multi-file, universality, and trust without reading code.**
+revolution is the **principle + the firewall + the byte-positivity law + the
+relentless discipline of proving every step**, not inventing the parts. On a
+one-character change in a trivial file, a plain editor is just as fast. Atomic OS
+wins where it matters: **structure, safety, multi-file, universality, and trust
+without reading code.**
+
+---
+
+## The byte-positivity law (no-bypass)
+
+The strongest guarantee in Atomic OS, and the one you'll notice first:
+
+> **Existing bytes are correct until proven otherwise.** Any tool whose net
+> effect *removes* or *overwrites* existing content is a **negative byte action**
+> and is **refused** unless the call carries a `proofOfIncorrectness` string
+> (≥20 chars) naming why those bytes are wrong. Purely **additive** edits
+> (inserts, new files, correctness-increasing changes) need no proof.
+
+In practice:
+
+```jsonc
+// refused — overwriting "greet" destroys correct-by-construction bytes:
+{ "name": "atomic_replace_at",
+  "arguments": { "file": "m.py", "mode": "content", "anchor": "greet", "newText": "salute", "occurrence": 1 } }
+// → "refused: negative byte action; provide proofOfIncorrectness (>=20 chars)…"
+
+// allowed — the same edit, justified:
+{ "name": "atomic_replace_at",
+  "arguments": { "file": "m.py", "mode": "content", "anchor": "greet", "newText": "salute", "occurrence": 1,
+                 "proofOfIncorrectness": "\"greet\" is the wrong verb for this API; the contract specifies \"salute\"." } }
+// → applied, with the proof recorded in the trace.
+```
+
+This is what makes an autonomous agent safe to let run: it can *add* and *fix*
+freely, but it can't *erase* your working code without leaving a justification on
+the record. The convergence/proof tools (below) build on this.
 
 ---
 
@@ -96,8 +139,8 @@ trivial file, a plain editor is just as fast. Atomic OS wins where it matters:
 git clone https://github.com/danielgonzagat/atomic-os
 cd atomic-os
 npm install        # pulls web-tree-sitter + grammars (the self-contained universal engine; no native binary)
-npm run build      # compiles src/ -> src/dist/
-npm test           # 20/20 smoke: build + live handshake + a real firewall-guarded edit + a transactional session
+npm run build      # compiles src/ -> src/dist/ and records the build manifest
+npm test           # 20/20 smoke: build + live handshake + a proven edit + a transactional session
 ```
 
 Then wire the launcher into your AI CLI's MCP config. The server **anchors to the
@@ -121,12 +164,11 @@ project**.
 [`integrations/codex/`](integrations/codex) for the per-CLI MCP entry + the
 "prefer atomic tools" agent rule and the **deny-hook that bans raw code edits**.
 
-Full setup, including the optional **deny-hook** that makes the atomic tools the
-*only* way to edit code: [`docs/INSTALL.md`](docs/INSTALL.md).
+Full setup, including the optional deny-hook: [`docs/INSTALL.md`](docs/INSTALL.md).
 
 ---
 
-## What you get — 68 tools
+## What you get — 83 tools
 
 | Group | Tools (highlights) | What it gives you |
 |---|---|---|
@@ -134,13 +176,18 @@ Full setup, including the optional **deny-hook** that makes the atomic tools the
 | **Universal structural (multi-lang)** | `atomic_ast_search`, `atomic_ast_edit`, `atomic_ast_rewrite`, `atomic_rename_symbol_universal`, `atomic_outline`, `atomic_native_status` | ast-grep search/rewrite + scope-aware rename + tree-sitter outline, in **any** language. |
 | **Symbol & TS-semantic** | `atomic_edit_symbol`, `atomic_rename_symbol`, `atomic_rename_symbol_cross_file`, `atomic_add_import`, `atomic_remove_import`, `atomic_change_signature`, `atomic_add_decorator`, `atomic_add_await_to_call` | Type-aware, scope-correct refactors via ts-morph. |
 | **Multi-file & semantic apply** | `atomic_transaction`, `atomic_apply_workspace_edit` | One all-or-nothing transaction across many files; apply any **LSP WorkspaceEdit** through the firewall. |
-| **Transactional sessions** | `atomic_session_begin`, `atomic_session_savepoint`, `atomic_session_rollback`, `atomic_session_commit` | A **named multi-tool window**: snapshot → many edits → **roll back or commit as one unit**, with named savepoints. Reversible long-running work. |
-| **Read / search / outline** | `atomic_grep`, `atomic_glob`, `atomic_outline`, `code_browse`, `code_outline`, `code_read_symbol` | Native ripgrep/glob/tree-sitter — faster and more structured than shelling out. |
+| **Transactional sessions** | `atomic_session_begin`, `atomic_session_savepoint`, `atomic_session_rollback`, `atomic_session_commit` | A **named multi-tool window**: snapshot → many edits → **roll back or commit as one unit**, with named savepoints. |
+| **Guarded execution** | `atomic_exec` | Run git / npm / tests inside the **same containment + trace + secret-redaction** envelope as edits — with an invariant denylist (no `git restore`, no `--no-verify`, no force-push). |
+| **Read / search / perception** | `atomic_grep`, `atomic_glob`, `atomic_outline`, `atomic_grep_calls`, `atomic_read_file`, `code_browse`, `code_outline`, `code_read_symbol` | Native ripgrep/glob/tree-sitter + AST-accurate call-site search + guarded reads. |
 | **Range / anchor primitives** | `atomic_replace_range`, `atomic_insert_at`, `atomic_delete_range`, `atomic_insert_after_anchor`, `atomic_replace_between_anchors`, `atomic_apply_edits` | Precise sub-line operators (the internal compilation target). |
+| **Convergence & proof** | `atomic_converge`, `atomic_prove`, `atomic_seal`, `atomic_y_certificate` | Commit a mutation **only if it converges green across every gate**; mint gate-sourced proof receipts and an honest universal-admission certificate. |
+| **Byte-positive materialization** | `atomic_positive_bytes_begin`, `atomic_positive_bytes_append`, `atomic_positive_bytes_commit` | Build up new content as a stream of **verified positive-byte** chunks. |
+| **Perception & repair** | `atomic_lens`, `atomic_scan_bytes`, `atomic_repair_scope` | Whole-scope red-set of every applicable gate; positive/negative byte map; resolve-or-dangle auto-repair. |
+| **Self-extension** | `atomic_expand_self` | Extend the engine itself, only under self-expansion admission + proof. |
 | **Files & governance** | `atomic_create_file`, `atomic_delete_file`, `atomic_lock_acquire/release`, `code_file_stat` | Firewall-guarded create/delete + multi-agent locks. |
 | **Proof & measurement** | `atomic_bypass_report`, `truth_receipt`, `behavior_receipt`, `zero_code_trust_score`, `product_intent_contract`, `continuity_status` | The bypass-rate meter + trust/proof/continuity receipts. |
 
-Run `tools/list` against the server for the full, current set (68 tools).
+Run `tools/list` against the server for the full, current set (83 tools).
 
 ---
 
@@ -148,36 +195,37 @@ Run `tools/list` against the server for the full, current set (68 tools).
 
 Every mutating tool, with **no exceptions**, goes through this exact sequence:
 
-1. **`resolveSafeTarget`** — the path is contained in the repo and is **not**
-   in your protected set (else: refused).
-2. **`sha256` guard** — optional optimistic-concurrency check (refuse if the file
+1. **`resolveSafeTarget`** — the path is contained in the repo and is **not** in
+   your protected set (else: refused).
+2. **byte-positivity gate** — if the action removes/overwrites existing bytes and
+   no `proofOfIncorrectness` is supplied, it is **refused** (see the law above).
+3. **`sha256` guard** — optional optimistic-concurrency check (refuse if the file
    changed under you).
-3. **`validate`** — the result is parsed (TS/JSON natively; many langs via
+4. **`validate`** — the result is parsed (TS/JSON natively; many langs via
    tree-sitter; structural-balance fallback). **A syntax-regressing edit is
    refused and never written.**
-4. **char-level trace** — exactly which characters changed, sha256 before/after,
-   written to `.atomic/traces/<op>.json`.
-5. **atomic write** — temp-file + fsync + rename (no torn files).
-6. **rollback** — the pre-edit content is the rollback source; a failed
-   validation never writes, so disk is never left half-edited. A whole
-   **session** can be rolled back to its opening snapshot or any savepoint.
+5. **char-level trace** — exactly which characters changed, sha256 before/after,
+   written to `.atomic/traces/<op>.json` (the proof + the rollback source).
+6. **atomic write** — temp-file + fsync + rename (no torn files).
+7. **rollback** — a failed validation never writes; a whole **session** can be
+   rolled back to its opening snapshot or any savepoint.
 
-The universal native engine runs **dry-run only** — it computes spans, it never
-writes. So even an engine fault can't corrupt your repo, and there is no "the
-engine wrote something the firewall didn't see."
+The universal engine runs **dry-run only** — it computes spans, it never writes.
+So even an engine fault can't corrupt your repo. A runtime **dist-freshness**
+check refuses to operate on a stale build, so the running server always matches
+its source.
 
 ---
 
 ## The universal engine (multi-language, pure WASM)
 
-Structural search/edit/rename/outline across many languages is powered by
+Structural search/edit/rename/outline is powered by
 **[`web-tree-sitter`](https://www.npmjs.com/package/web-tree-sitter)** — the
 official tree-sitter compiled to WebAssembly — plus the canonical
 `tree-sitter-<lang>` grammar packages (Python, JavaScript, TypeScript/TSX, Go,
-Ruby, Rust, Java, C, C++, Bash, JSON today; drop in another grammar package to
-extend it). There is **no native binary**: the engine is plain WASM that runs
-in-process on every platform, installed by an ordinary `npm install`. Because
-WASM is memory-safe it cannot crash the host.
+Ruby, Rust, Java, C, C++, Bash, JSON today). There is **no native binary**: the
+engine is plain WASM that runs in-process on every platform, installed by an
+ordinary `npm install`.
 
 It **degrades cleanly**: if web-tree-sitter or a grammar fails to load, the
 `atomic_ast_*` / `atomic_grep` / universal-rename / `atomic_outline` tools report
@@ -216,8 +264,8 @@ export ATOMIC_EDIT_PROTECTED_FILES="CLAUDE.md:.github/workflows/ci.yml:src/lib/k
 ```
 
 Any edit to a protected path is refused for **all** AI CLIs — only you change it.
-The repo-containment boundary always applies regardless of config. To pin the
-repo root explicitly (e.g. in CI), set `ATOMIC_EDIT_REPO_ROOT`.
+The repo-containment boundary always applies. To pin the repo root explicitly
+(e.g. in CI), set `ATOMIC_EDIT_REPO_ROOT`.
 
 ---
 
@@ -225,10 +273,10 @@ repo root explicitly (e.g. in CI), set `ATOMIC_EDIT_REPO_ROOT`.
 
 ```bash
 npm test
-#  PASS  server lists >= 60 tools (got 68)
+#  PASS  server lists >= 60 tools (got 83)
 #  PASS  tool present: atomic_replace_at / atomic_ast_edit / atomic_rename_symbol_universal / ...
-#  PASS  atomic_replace_at applied              (a real content-addressed edit)
-#  PASS  edit persisted (greet->salute)         (in a Python file)
+#  PASS  atomic_replace_at applied              (a negative-byte edit, allowed via proofOfIncorrectness)
+#  PASS  edit persisted (greet->salute)
 #  PASS  path-escape refused                    (the firewall)
 #  PASS  atomic_session_begin returns a session id
 #  PASS  edit inside session applied (salute->hail)
@@ -238,8 +286,9 @@ npm test
 ```
 
 Every check runs the **live MCP server** in an isolated temp workspace — no host
-monorepo, no mocks. The session checks prove the transactional window really
-snapshots, rolls back, and commits.
+monorepo, no mocks. The edit checks exercise the byte-positivity law (a negative
+edit is allowed only with proof); the session checks prove the transactional
+window really snapshots, rolls back, and commits.
 
 ---
 
@@ -249,12 +298,11 @@ snapshots, rolls back, and commits.
   it's at parity with mainstream agents.
 - On trivial one-shot edits, a plain editor is equally fast; Atomic OS dominates
   on structure, multi-file, universality, safety, and auditability.
-- Type-aware refactors (scope rename with types, signature changes) are deep on
-  **TS/JS** (ts-morph); other languages get **syntactic** structural edits + tree-
-  sitter scope, not full type resolution.
-- The universal engine is pure WASM (web-tree-sitter) — no native binary, runs
-  on every platform. Languages beyond the bundled grammar set are added by
-  installing the matching `tree-sitter-<lang>` package.
+- Type-aware refactors are deep on **TS/JS** (ts-morph); other languages get
+  **syntactic** structural edits + tree-sitter scope, not full type resolution.
+- The byte-positivity law is strict by design: an agent (or you) must justify any
+  edit that removes existing bytes. That's the point — but it means destructive
+  edits need a one-line `proofOfIncorrectness`.
 
 ---
 
@@ -262,14 +310,14 @@ snapshots, rolls back, and commits.
 
 ```
 src/                     the MCP server (compiles to src/dist/)
-  server.ts              entrypoint — registers all tool groups
+  server.ts              entrypoint — registers all 83 tools across the groups
   engine*.ts             the edit engine (apply, validate, zones, rename, universal)
   guard.ts               repo-containment + your protected-file config
   native-bridge.ts       the universal engine — web-tree-sitter (WASM), in-process
-  server-tools-*.ts      the 68 tools (incl. server-tools-session.ts)
+  server-tools-*.ts      the tool groups (edit, session, exec, converge, lens, y, self, …)
   server-helpers-*.ts    the firewall (commit, multi-file, io, trace, verify, effect/session)
-  bypass-*.mjs           the bypass-rate meter (classify / observe / report)
-  trace.ts               the char-level proof ledger
+  gates/                 the convergence/proof gate lattice (perception, contract, algebra, …)
+  dist-freshness.mjs     the runtime stale-build guard + build manifest
   build.mjs              self-contained compiler (no tsx/npx/network)
   smoke.mjs              standalone end-to-end proof (20/20)
 docs/                    INSTALL, GOVERNANCE, OPERATING_GUIDE, the PRINCIPLE
@@ -280,4 +328,4 @@ atomic-edit.protected.example.json   copy → atomic-edit.protected.json
 ---
 
 **Atomic OS** — intention high, action minimal, proof clear, rollback possible,
-continuity persisted, **product as the end**. MIT licensed.
+bytes positive, continuity persisted, **product as the end**. MIT licensed.

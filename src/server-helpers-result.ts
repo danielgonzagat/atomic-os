@@ -6,6 +6,10 @@ import { atomicWrite, sha256, log, targetDetails } from './server-helpers-io.js'
 import { characterDiff, previewDiff } from './advanced.js';
 import { runPostEditVerify } from './server-helpers-verify.js';
 import { lockDir, autoLockCleanup, autoLockFile } from './server-helpers-product-locks.js';
+import {
+  requireNegativeProofForRemovedBytes,
+  type NegativeActionProof,
+} from './server-helpers-negative-proof.js';
 
 export interface ToolOk {
   content: { type: 'text'; text: string }[];
@@ -73,6 +77,9 @@ export function commit(
       ...targetDetails(absPath, relPath),
     });
   }
+  // NOTE: the connection gate is NOT applied here — it lives at the byte floor
+  // (atomicWrite in server-helpers-io), so EVERY write path is covered, not just
+  // commit(). This keeps a single immutable chokepoint instead of a per-tool guard.
   const level = levelFor(preview);
   const operator = String(
     (extra as Record<string, unknown>).op ??
@@ -82,6 +89,21 @@ export function commit(
   const inlinePreview = characterDiff(before, result.newText, relPath);
   const repoRoot = resolveAllowedRootForAbsolutePath(absPath) ?? REPO_ROOT;
   const editZones = computeZones(before, result.newText);
+  let negativeActionProof = (extra as { negativeActionProof?: NegativeActionProof }).negativeActionProof;
+  if (!negativeActionProof) {
+    try {
+      negativeActionProof = requireNegativeProofForRemovedBytes({
+        action: operator,
+        target: relPath,
+        targetUnit: 'file',
+        before,
+        after: result.newText,
+        preview,
+      });
+    } catch (e) {
+      return fail(e instanceof Error ? e.message : String(e));
+    }
+  }
   const trace = buildTrace({
     file: relPath,
     repoRoot,
@@ -100,6 +122,7 @@ export function commit(
     movementZones: editZones.movementZones,
     preview,
     changed: !preview,
+    negativeActionProof,
   });
   if (preview) {
     return ok(
@@ -211,5 +234,64 @@ export function commit(
         // best-effort cleanup
       }
     }
+  }
+}
+
+/**
+ * Single-file whole-content write THROUGH the trace ledger: atomicWrite +
+ * buildTrace + writeTrace. For tools that compute `after` themselves and return
+ * a CUSTOM payload (so they cannot use commit() without reshaping their result
+ * and breaking callers). This upholds the "every mutation persists an
+ * AtomicEditTrace" invariant for those tools without changing their return
+ * shape. Trace failure never aborts a successful write — the trace is the
+ * receipt, not the mutation.
+ */
+export function writeWithTrace(
+  relPath: string,
+  absPath: string,
+  before: string,
+  after: string,
+  operator: string,
+  validation: ValidationResult,
+  negativeActionProof?: NegativeActionProof,
+): void {
+  let provenNegativeAction = negativeActionProof;
+  if (!provenNegativeAction) {
+    provenNegativeAction = requireNegativeProofForRemovedBytes({
+      action: operator,
+      target: relPath,
+      targetUnit: 'file',
+      before,
+      after,
+    });
+  }
+  atomicWrite(absPath, after);
+  try {
+    const repoRoot = resolveAllowedRootForAbsolutePath(absPath) ?? REPO_ROOT;
+    const zones = computeZones(before, after);
+    const trace = buildTrace({
+      file: relPath,
+      repoRoot,
+      operator,
+      before,
+      newText: after,
+      inlinePreview: characterDiff(before, after, relPath),
+      validation: { language: validation.language, before: validation.before, after: validation.after },
+      metrics: {
+        changedChars: 0,
+        lineRewriteSurfaceChars: 0,
+        expansionFactorAvoided: 1,
+        bytesNet: after.length - before.length,
+      },
+      preservedZones: zones.preservedZones,
+      modifiedZones: zones.modifiedZones,
+      movementZones: zones.movementZones,
+      preview: false,
+      changed: true,
+      negativeActionProof: provenNegativeAction,
+    });
+    writeTrace(trace);
+  } catch {
+    /* trace is the durable receipt, not the mutation — never fail a good write on it */
   }
 }

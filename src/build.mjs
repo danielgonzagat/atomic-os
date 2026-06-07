@@ -13,6 +13,7 @@ import { createRequire } from 'node:module';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { writeManifest } from './dist-freshness.mjs';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -73,4 +74,7 @@ fs.writeFileSync(path.join(OUT, 'package.json'), JSON.stringify({ type: 'module'
 for (const asset of ['worker-scope-check.mjs']) {
   fs.copyFileSync(path.join(dir, asset), path.join(OUT, asset));
 }
+// Record the source+dist build manifest so the runtime dist-freshness gate
+// (server-helpers-hot-reload) sees the freshly-built dist as fresh.
+writeManifest(dir);
 process.stderr.write(`atomic-edit build OK -> ${OUT}\n`);

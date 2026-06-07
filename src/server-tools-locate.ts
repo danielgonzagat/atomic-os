@@ -11,8 +11,9 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { applyEdits, type TextEditSpec } from './engine.js';
 import { resolveSafeTarget } from './guard.js';
-import { readUtf8, guardSha, atomicWrite, log } from './server-helpers-io.js';
-import { ok, fail, commit, type ToolOk } from './server-helpers-result.js';
+import { readUtf8, guardSha, log } from './server-helpers-io.js';
+import { ok, fail, commit, writeWithTrace, type ToolOk } from './server-helpers-result.js';
+import { requireNegativeProofForRemovedBytes } from './server-helpers-negative-proof.js';
 
 /** UTF-16 string offset -> 1-based {line,column} (inverse of engine.posToOffset). */
 function offsetToPos(text: string, offset: number): { line: number; column: number } {
@@ -63,6 +64,7 @@ export interface ReplaceAtArgs {
   occurrence?: number;
   expectedSha256?: string;
   preview?: boolean;
+  proofOfIncorrectness?: string;
   verify?: 'typecheck' | 'lint';
   lock?: boolean;
 }
@@ -96,12 +98,21 @@ export function doReplaceAt(a: ReplaceAtArgs): ToolOk {
     }
 
     const result = applyEdits(absPath, before, [spec]);
+    const negativeActionProof = requireNegativeProofForRemovedBytes({
+      action: 'atomic_replace_at',
+      target: relPath,
+      targetUnit: a.mode === 'content' ? 'content' : 'anchor-insertion',
+      before,
+      after: result.newText,
+      proofOfIncorrectness: a.proofOfIncorrectness,
+      preview: a.preview ?? false,
+    });
     return commit(
       relPath,
       absPath,
       before,
       result,
-      { operator: 'atomic_replace_at', mode: a.mode },
+      { operator: 'atomic_replace_at', mode: a.mode, ...(negativeActionProof ? { negativeActionProof } : {}) },
       a.preview ?? false,
       a.verify,
       a.lock,
@@ -131,6 +142,10 @@ export function registerToolsLocate(server: McpServer): void {
         occurrence: z.number().int().min(1).optional(),
         expectedSha256: z.string().optional(),
         preview: z.boolean().optional(),
+        proofOfIncorrectness: z
+          .string()
+          .optional()
+          .describe('required when content replacement removes bytes: proof that removed bytes are non-correct/negative'),
         verify: z.enum(['typecheck', 'lint']).optional(),
         lock: z.boolean().optional(),
       },
@@ -185,7 +200,7 @@ export function registerToolsLocate(server: McpServer): void {
       description:
         'Rename the symbol at (line,column) across the file. TS/JS: ts-morph (scope-correct, respects ' +
         'binding/shadowing). All other languages: identifier word-boundary matching + tree-sitter scope ' +
-        'analysis when available, syntax-validated. The universal rename_symbol that works on any source file.',
+        'analysis when available, syntax-validated. The universal rename_symbol that works on every source file.',
       inputSchema: {
         file: z.string(),
         line: z.number().int().min(1),
@@ -218,7 +233,7 @@ export function registerToolsLocate(server: McpServer): void {
             method: r.method,
           });
         }
-        atomicWrite(absPath, r.newText);
+        writeWithTrace(relPath, absPath, before, r.newText, 'atomic_rename_symbol_universal', r.validation);
         log(`universal rename ${r.oldName}->${r.newName}: ${r.occurrences} occurrences via ${r.method}`);
         return ok({
           ok: true,

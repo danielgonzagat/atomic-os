@@ -3,7 +3,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { atomicWrite } from './server-helpers-io.js';
 import { ok, fail } from './server-helpers-result.js';
-import { chooseIntegration, riskLevelFor, validationPlan, evidenceWeight, classifyTruth, readJsonOptional, readTextOptional, lockRoot, safeLockId, lockDir, lockFile, readLockRecord, listLocks, PRODUCT_INTEGRATION_IDS, EvidenceKindSchema, EvidenceStatusSchema } from './server-helpers-product-locks.js';
+import { chooseIntegration, riskLevelFor, validationPlan, verifiedEvidenceWeight, classifyTruth, artifactExists, isRealKind, productEvidenceVerified, hasVerifiedProductProof, readJsonOptional, readTextOptional, lockRoot, safeLockId, lockDir, lockFile, readLockRecord, listLocks, PRODUCT_INTEGRATION_IDS, EvidenceKindSchema, EvidenceStatusSchema } from './server-helpers-product-locks.js';
+import { runProveDirective, isGateBackedRealProbe } from './gate-receipt-mapper.js';
 
 export function registerToolsH(server: McpServer): void {
 server.registerTool(
@@ -85,11 +86,17 @@ server.registerTool(
   async (a) => {
     try {
       const rawScore = Math.max(
-        ...a.evidence.map((entry) => evidenceWeight(entry.kind, entry.status)),
+        ...a.evidence.map((entry) =>
+          verifiedEvidenceWeight(entry.kind, entry.status, entry.artifactPaths),
+        ),
       );
       const failed = a.evidence.filter((entry) => entry.status === 'failed');
+      const productProven = hasVerifiedProductProof(a.evidence);
       let score = rawScore;
-      if (a.founderCanValidateByProduct) score = Math.max(score, 100);
+      // founderCanValidateByProduct can only REALISE 100 when a verified product-proof
+      // artifact backs it — the agent cannot self-assert PRODUCT_VALIDATABLE. Without a
+      // verified artifact the flag is ignored (unproven ≡ negative).
+      if (a.founderCanValidateByProduct && productProven) score = Math.max(score, 100);
       if (a.requiresCodeReview) score = Math.min(score, 50);
       if (a.requiresTechnicalDecision) score = Math.min(score, 25);
       if (a.requiresManualFix) score = 0;
@@ -104,8 +111,12 @@ server.registerTool(
               : score > 0
                 ? 'TECHNICAL_HELP_STILL_NEEDED'
                 : 'MANUAL_FIX_REQUIRED';
-      const summaryForHuman = `Zero-Code Trust ${score}/100: ${verdict}. ${failed.length > 0 ? `${failed.length} evidencia(s) falharam.` : 'Sem falha explicita nas evidencias anexadas.'}`;
-      return ok({ ok: true, summaryForHuman, summary: summaryForHuman, score, verdict, failed });
+      const flagNote =
+        a.founderCanValidateByProduct && !productProven
+          ? ' founderCanValidateByProduct ignorado: nenhuma evidencia de produto verificada por artefato.'
+          : '';
+      const summaryForHuman = `Zero-Code Trust ${score}/100: ${verdict}. ${failed.length > 0 ? `${failed.length} evidencia(s) falharam.` : 'Sem falha explicita nas evidencias anexadas.'}${flagNote}`;
+      return ok({ ok: true, summaryForHuman, summary: summaryForHuman, score, verdict, failed, productProven });
     } catch (e) {
       return fail(e instanceof Error ? e.message : String(e));
     }
@@ -140,20 +151,16 @@ server.registerTool(
   async (a) => {
     try {
       const trust = Math.max(
-        ...a.validation.map((entry) => evidenceWeight(entry.kind, entry.status)),
+        ...a.validation.map((entry) =>
+          verifiedEvidenceWeight(entry.kind, entry.status, entry.artifactPaths),
+        ),
       );
       const failing = a.validation.filter((entry) => entry.status === 'failed');
-      const productProof = a.validation.some(
-        (entry) =>
-          entry.status === 'passed' &&
-          [
-            'api',
-            'db',
-            'browser',
-            'runtime_probe',
-            'external_provider',
-            'manual_product_check',
-          ].includes(entry.kind),
+      // productProof requires VERIFIED product evidence (an artifact on disk), not a
+      // self-reported passed status — so a receipt cannot claim 100 from a bare
+      // "api passed". unproven ≡ negative.
+      const productProof = a.validation.some((entry) =>
+        productEvidenceVerified(entry.kind, entry.status, entry.artifactPaths),
       );
       const score =
         failing.length > 0
@@ -202,6 +209,11 @@ server.registerTool(
             status: EvidenceStatusSchema,
             artifactPaths: z.array(z.string()).optional(),
             externalBlocker: z.string().optional(),
+            // The unforgeable REAL token. A runtime_probe claim is only honoured as
+            // REAL when this id was MINTED by a real green gate run via atomic_prove
+            // (verified against the in-process gate-run registry). A fabricated or
+            // hand-typed runtime_probe carries no valid id and is REFUSED below.
+            gateRunId: z.string().optional(),
           }),
         )
         .min(1),
@@ -209,21 +221,96 @@ server.registerTool(
   },
   async (a) => {
     try {
-      const classified = a.claims.map((claim) => ({
-        ...claim,
-        truth: classifyTruth(claim.evidenceKind, claim.status, Boolean(claim.externalBlocker)),
-      }));
+      const classified = a.claims.map((claim) => {
+        // unproven ≡ negative. A REAL verdict over a product-behavior kind demands
+        // VERIFIABLE evidence: a runtime_probe needs a gate-minted gateRunId (the
+        // unforgeable token from a real green atomic_prove run); every other real kind
+        // needs an artifactPath that exists on disk. A self-reported status is never
+        // proof, so an unverified real-kind claim is downgraded to UNPROVEN and
+        // REFUSED-as-REAL with a reason — the receipt can no longer be tricked into
+        // selling REAL on a fabrication (probe id OR existing artifact, nothing less).
+        const isProbe = claim.evidenceKind === 'runtime_probe';
+        const verified = isProbe
+          ? isGateBackedRealProbe(claim.gateRunId)
+          : artifactExists(claim.artifactPaths);
+        const truth = classifyTruth(
+          claim.evidenceKind,
+          claim.status,
+          Boolean(claim.externalBlocker),
+          verified,
+        );
+        const downgraded =
+          isRealKind(claim.evidenceKind) &&
+          claim.status === 'passed' &&
+          !claim.externalBlocker &&
+          truth !== 'REAL';
+        if (downgraded) {
+          return {
+            ...claim,
+            truth,
+            refused: true,
+            refusalReason: isProbe
+              ? 'runtime_probe REFUSED as REAL: no valid gateRunId from a real green gate run ' +
+                '(use atomic_prove to mint one). A hand-supplied runtime_probe cannot be sold as REAL.'
+              : `${claim.evidenceKind} REFUSED as REAL: no existing artifactPath to verify the claim. ` +
+                'Attach a real, non-empty artifact (response/log/screenshot) or downgrade the claim. ' +
+                'A self-reported status is not proof.',
+          };
+        }
+        return { ...claim, truth, refused: false as const };
+      });
       const blocking = classified.filter((claim) => claim.truth !== 'REAL');
+      const refused = classified.filter((claim) => claim.refused === true);
+      const refusalNote =
+        refused.length > 0
+          ? ` ${refused.length} runtime_probe(s) RECUSADA(s) por falta de gateRunId de gate real (use atomic_prove).`
+          : '';
       const summaryForHuman =
-        blocking.length === 0
+        (blocking.length === 0
           ? `Todas as ${classified.length} alegacoes tem prova de comportamento real.`
-          : `${blocking.length}/${classified.length} alegacao(oes) ainda nao sao REAL: ${blocking.map((claim) => `${claim.claim}=${claim.truth}`).join('; ')}`;
+          : `${blocking.length}/${classified.length} alegacao(oes) ainda nao sao REAL: ${blocking.map((claim) => `${claim.claim}=${claim.truth}`).join('; ')}`) +
+        refusalNote;
       return ok({
         ok: true,
         summaryForHuman,
         summary: summaryForHuman,
         claims: classified,
         blocking,
+        refused,
+      });
+    } catch (e) {
+      return fail(e instanceof Error ? e.message : String(e));
+    }
+  },
+);
+
+server.registerTool(
+  'atomic_prove',
+  {
+    title: 'Run a real gate against a directive and mint a gate-sourced runtime_probe',
+    description:
+      'GATE-SOURCED TRUTH. Writes `directive` (e.g. a // @model … or // @probe-convergence … or a // @liveness call-site) into a THROWAWAY probe file through the atomicWrite byte-floor, runs the DYNAMIC gate set against it (apply→run→revert byte-exact), and maps the verdict into a receipt evidence item. On GREEN it MINTS an unforgeable gateRunId — the ONLY token truth_receipt will accept as a REAL runtime_probe. A failed/unjudged run mints nothing. This is what makes the REAL tier of a receipt impossible to fabricate by hand.',
+    inputSchema: {
+      claim: z.string().min(1),
+      directive: z
+        .string()
+        .min(1)
+        .describe(
+          'a self-driving gate directive, e.g. "// @model id=ctr init=\'[0]\' next=\'(s)=>s<3?[s+1]:[]\' invariant=\'(s)=>s<=3\' cap=16"',
+        ),
+    },
+  },
+  async (a) => {
+    try {
+      const result = await runProveDirective({ claim: a.claim, directive: a.directive });
+      return ok({
+        ok: true,
+        summaryForHuman: result.summaryForHuman,
+        summary: result.summaryForHuman,
+        evidence: result.evidence,
+        gateRunId: result.evidence.gateRunId ?? null,
+        run: result.run,
+        minted: result.record !== null,
       });
     } catch (e) {
       return fail(e instanceof Error ? e.message : String(e));

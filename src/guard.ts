@@ -39,10 +39,46 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 // worktree arm run the SAME OS binary while resolving relative paths against —
 // and being sandboxed to — its own tree, never the code's repo.
 const ROOT_OVERRIDE = process.env.ATOMIC_EDIT_REPO_ROOT?.trim();
-export const REPO_ROOT = ROOT_OVERRIDE ? canonicalPath(ROOT_OVERRIDE) : findRepoRoot(HERE);
+const HOST_WRITE_ROOT = process.env.ATOMIC_HOST_WRITE_ROOT?.trim();
+export const REPO_ROOT = canonicalPath(ROOT_OVERRIDE ? ROOT_OVERRIDE : findRepoRoot(HERE));
+
+function nearestExistingPath(target: string): { existing: string; suffix: string[] } | null {
+  let cursor = path.resolve(target);
+  const suffix: string[] = [];
+  for (;;) {
+    if (fs.existsSync(cursor)) return { existing: cursor, suffix };
+    const parent = path.dirname(cursor);
+    if (parent === cursor) return null;
+    suffix.unshift(path.basename(cursor));
+    cursor = parent;
+  }
+}
+
+function hostVisiblePath(target: string): string | null {
+  if (!HOST_WRITE_ROOT) return null;
+  const hostRoot = path.resolve(HOST_WRITE_ROOT);
+  let hostReal: string;
+  try {
+    hostReal = fs.realpathSync.native(hostRoot);
+  } catch {
+    return null;
+  }
+  const targetExisting = nearestExistingPath(target);
+  if (!targetExisting) return null;
+  let existingReal: string;
+  try {
+    existingReal = fs.realpathSync.native(targetExisting.existing);
+  } catch {
+    return null;
+  }
+  if (!containsPath(hostReal, existingReal)) return null;
+  return path.join(hostRoot, path.relative(hostReal, existingReal), ...targetExisting.suffix);
+}
 
 function canonicalPath(target: string): string {
   const resolved = path.resolve(target);
+  const hostVisible = hostVisiblePath(resolved);
+  if (hostVisible) return hostVisible;
   try {
     return fs.realpathSync.native(resolved);
   } catch {
@@ -118,67 +154,38 @@ function resolveTargetRoot(file: string): { absPath: string; repoRoot: string } 
   return { absPath, repoRoot };
 }
 
-/**
- * Protected paths are USER-CONFIGURED — this is a generic, shareable tool with
- * NO project-specific defaults. Two sources, merged, EMPTY by default:
- *   1. env `ATOMIC_EDIT_PROTECTED_FILES` — OS-path-delimited exact paths/globs.
- *   2. `atomic-edit.protected.json` at the repo root: { "files": [], "globs": [] }.
- * With no config, nothing is protected (the path-escape containment boundary in
- * resolveTargetRoot still always applies). See atomic-edit.protected.example.json.
- */
-interface ProtectedConfig {
-  files: Set<string>;
-  globs: RegExp[];
-}
+/** Exact repo-relative paths that no AI CLI may modify. */
+const PROTECTED_FILES = new Set<string>([
+  "AGENTS.md",
+  "CLAUDE.md",
+  "CODEX.md",
+  ".codacy.yml",
+  "ratchet.json",
+  "package.json",
+  ".husky/commit-msg",
+  ".husky/pre-push",
+  "backend/eslint.config.mjs",
+  "frontend/eslint.config.mjs",
+  "worker/eslint.config.mjs",
+  "backend/src/lib/openai-models.ts",
+  "backend/src/lib/ai-models.ts",
+  "scripts/pulse/no-hardcoded-reality-audit.ts",
+]);
 
-function globToRegExp(glob: string): RegExp {
-  const esc = glob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
-  return new RegExp(`^${esc}$`);
-}
+const PROTECTED_PREFIXES = [
+  ".github/workflows/",
+  "docs/codacy/",
+  "docs/design/",
+  "ops/",
+  "scripts/ops/",
+];
 
-function loadProtectedConfig(): ProtectedConfig {
-  const files = new Set<string>();
-  const globs: RegExp[] = [];
-  const add = (entry: string) => {
-    const e = entry.trim();
-    if (!e) return;
-    if (e.includes("*")) {
-      try {
-        globs.push(globToRegExp(e));
-      } catch {
-        process.stderr.write(`[atomic-edit guard] ignoring invalid protected glob: ${e}\n`);
-      }
-    } else {
-      files.add(e);
-    }
-  };
-  const envList = process.env.ATOMIC_EDIT_PROTECTED_FILES;
-  if (envList) for (const part of envList.split(path.delimiter)) add(part);
-  const configPath = path.join(REPO_ROOT, "atomic-edit.protected.json");
-  try {
-    if (fs.existsSync(configPath)) {
-      const raw = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
-        files?: string[];
-        globs?: string[];
-      };
-      for (const f of raw.files ?? []) add(f);
-      for (const g of raw.globs ?? []) add(g);
-    }
-  } catch {
-    process.stderr.write(
-      `[atomic-edit guard] atomic-edit.protected.json unreadable, treating ` +
-        `protected set as empty (path-escape boundary still applies)\n`,
-    );
+/** Repo-relative prefixes/globs that are protected directory-wide. */
+export function isProtectedRelative(rel: string): string | null {
+  if (PROTECTED_FILES.has(rel)) return rel;
+  for (const prefix of PROTECTED_PREFIXES) {
+    if (rel.startsWith(prefix)) return prefix;
   }
-  return { files, globs };
-}
-
-const PROTECTED = loadProtectedConfig();
-
-/** Repo-relative path/glob protection, from the user's config (empty by default). */
-function isProtectedRelative(rel: string): string | null {
-  if (PROTECTED.files.has(rel)) return rel;
-  for (const re of PROTECTED.globs) if (re.test(rel)) return re.source;
   return null;
 }
 
@@ -205,8 +212,7 @@ export function resolveSafeTarget(file: string): ResolvedTarget {
   const hit = isProtectedRelative(relPath);
   if (hit) {
     throw new Error(
-      `refused: ${relPath} is governance-protected (matches "${hit}" in your ` +
-        `atomic-edit.protected.json / ATOMIC_EDIT_PROTECTED_FILES). ` +
+      `refused: ${relPath} is governance-protected (matches "${hit}" in CLAUDE.md). ` +
         `Only the repo owner may change it — ask, do not bypass.`,
     );
   }
