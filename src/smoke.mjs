@@ -112,6 +112,16 @@ check('atomic_add_import on Go (import) applies', !!impGo && fs.readFileSync(pat
 // LSP awareness: a non-TS cross-file rename surfaces the exact missing language server + install command
 const lspGo = await rpc(18, 'tools/call', { name: 'atomic_rename_symbol_cross_file', arguments: { file: 'b.go', line: 3, column: 6, newName: 'Renamed' } });
 check('atomic surfaces the missing LSP (gopls) + install command for non-TS cross-file rename', /gopls/.test(txt(lspGo)) && /install|INSTALL/.test(txt(lspGo)));
+// universal decorator + await across non-TS grammars
+fs.writeFileSync(path.join(work, 'd.py'), 'import os\ndef greet(n):\n    return n\n');
+const decPy = await rpc(19, 'tools/call', { name: 'atomic_add_decorator', arguments: { file: 'd.py', targetLine: 2, decorator: '@staticmethod' } });
+check('atomic_add_decorator on Python applies', !!decPy && fs.readFileSync(path.join(work, 'd.py'), 'utf8').includes('@staticmethod'));
+fs.writeFileSync(path.join(work, 'a.py'), 'async def f():\n    fetch(1)\n');
+const awPy = await rpc(20, 'tools/call', { name: 'atomic_add_await_to_call', arguments: { file: 'a.py', callee: 'fetch' } });
+check('atomic_add_await_to_call on Python prefixes await', !!awPy && /await fetch\(1\)/.test(fs.readFileSync(path.join(work, 'a.py'), 'utf8')));
+fs.writeFileSync(path.join(work, 'a.rs'), 'async fn f() {\n    fetch(1);\n}\n');
+const awRs = await rpc(21, 'tools/call', { name: 'atomic_add_await_to_call', arguments: { file: 'a.rs', callee: 'fetch' } });
+check('atomic_add_await_to_call on Rust appends .await', !!awRs && /fetch\(1\)\.await/.test(fs.readFileSync(path.join(work, 'a.rs'), 'utf8')));
 
 srv.kill('SIGKILL');
 

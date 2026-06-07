@@ -1,7 +1,7 @@
 import * as ts from 'typescript';
 import { validate, type ValidationResult } from './engine.js';
 import { resolveSymbol } from './symbols.js';
-import { universalAddImport, universalRemoveImport } from './engine-universal-imports.js';
+import { universalAddImport, universalRemoveImport, universalAddAwait } from './engine-universal-imports.js';
 
 // ── v3: import + object-property semantic ops (adopted from Codex's
 //        semantic-edit, but routed through validate()+atomic write so they
@@ -335,7 +335,11 @@ export async function addAwaitToCall(
   callee: string,
   selector?: string,
 ): Promise<SemanticEditResult> {
-  assertTs(file, 'add_await_to_call');
+  const awaitExt = (() => {
+    const i = file.lastIndexOf('.');
+    return i < 0 ? '' : file.slice(i).toLowerCase();
+  })();
+  if (!TS_EXT.has(awaitExt)) return universalAddAwait(file, original, callee, awaitExt);
   const { SyntaxKind, Node } = await import('ts-morph');
   const sf = await tsmProject(file, original);
   const scopeNode = selector ? resolveSymbol(sf, selector).node : sf;

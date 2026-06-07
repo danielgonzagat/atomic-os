@@ -128,3 +128,42 @@ export async function universalRemoveImport(
   const newText = lines.join('\n');
   return { newText, validation: validate(file, original, newText), detail: { action: 'removed', moduleSpecifier, name, method: 'cst-correct' } };
 }
+
+/** Node type + insertion mode for `await` per grammar (TS/JS go through ts-morph). */
+const AWAIT_CALL: Record<string, { type: string; mode: 'prefix' | 'postfix' }> = {
+  python: { type: 'call', mode: 'prefix' },
+  rust: { type: 'call_expression', mode: 'postfix' },
+};
+
+/** Await a call to `callee` for the grammars where await is meaningful (python prefix, rust `.await`). */
+export async function universalAddAwait(
+  file: string,
+  original: string,
+  callee: string,
+  ext: string,
+): Promise<SemanticEditResult> {
+  const grammar = extToGrammar(ext);
+  const cfg = grammar ? AWAIT_CALL[grammar] : undefined;
+  if (!cfg) {
+    throw new Error(`add_await_to_call: await is not applicable to "${grammar ?? (ext || '(none)')}" — supported: python (prefix await), rust (.await); TS/JS go through ts-morph`);
+  }
+  const nodes = await astNodes(original, grammar as string, new Set([cfg.type]));
+  if (!nodes) throw new Error(`add_await_to_call: ${grammar} parser unavailable (universal engine not loaded)`);
+  const calls = nodes.filter((n) => n.text.startsWith(`${callee}(`));
+  if (calls.length === 0) throw new Error(`add_await_to_call: no call to "${callee}(" found in ${grammar}`);
+  if (calls.length > 1) throw new Error(`add_await_to_call: "${callee}" is called ${calls.length} times — ambiguous; narrow it`);
+  const node = calls[0];
+  const at = original.indexOf(node.text);
+  if (at < 0 || original.indexOf(node.text, at + 1) >= 0) {
+    throw new Error(`add_await_to_call: could not uniquely locate the call to "${callee}" for a byte-correct edit`);
+  }
+  let newText: string;
+  if (cfg.mode === 'prefix') {
+    if (/\bawait\s+$/.test(original.slice(0, at))) throw new Error(`add_await_to_call: the call to "${callee}" is already awaited`);
+    newText = `${original.slice(0, at)}await ${original.slice(at)}`;
+  } else {
+    const end = at + node.text.length;
+    newText = `${original.slice(0, end)}.await${original.slice(end)}`;
+  }
+  return { newText, validation: validate(file, original, newText), detail: { action: 'awaited', callee, grammar, method: 'cst-correct' } };
+}
