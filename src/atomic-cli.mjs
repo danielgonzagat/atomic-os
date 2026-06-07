@@ -17,7 +17,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -225,6 +225,78 @@ function cmdInit() {
   process.exit(0);
 }
 
+// ── MCP trust firewall — capability manifest + tool-poisoning / rug-pull detection ──
+function parseCmdFlag() {
+  const i = process.argv.indexOf('--cmd');
+  if (i >= 0 && process.argv[i + 1]) return process.argv[i + 1].split(' ');
+  return ['bash', path.join(here, 'atomic-edit-mcp-launcher.sh')]; // default: this server
+}
+function listToolsFromServer(cmd) {
+  return new Promise((resolve, reject) => {
+    const srv = spawn(cmd[0], cmd.slice(1), { stdio: ['pipe', 'pipe', 'ignore'] });
+    let buf = ''; const waiters = new Map(); let done = false;
+    const finish = (fn, arg) => { if (done) return; done = true; clearTimeout(to); try { srv.kill('SIGKILL'); } catch { /* noop */ } fn(arg); };
+    const to = setTimeout(() => finish(reject, new Error('MCP server timed out (no tools/list)')), 30000);
+    srv.on('error', (e) => finish(reject, e));
+    srv.stdout.on('data', (d) => {
+      buf += d; let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const l = buf.slice(0, i); buf = buf.slice(i + 1);
+        if (!l.trim()) continue;
+        let m; try { m = JSON.parse(l); } catch { continue; }
+        if (m.id && waiters.has(m.id)) { waiters.get(m.id)(m); waiters.delete(m.id); }
+      }
+    });
+    const rpc = (id, method, params) => new Promise((r) => { waiters.set(id, r); srv.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n'); });
+    (async () => {
+      await rpc(1, 'initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'atomic-mcp-guard', version: '1' } });
+      srv.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+      const l = await rpc(2, 'tools/list', {});
+      finish(resolve, (l.result?.tools ?? []).map((t) => ({ name: t.name, description: t.description ?? '', inputSchema: t.inputSchema ?? {} })));
+    })().catch((e) => finish(reject, e));
+  });
+}
+function manifestOf(tools) {
+  const m = {};
+  for (const t of tools.slice().sort((a, b) => a.name.localeCompare(b.name))) {
+    m[t.name] = sha256(`${t.name}\n${t.description}\n${canonicalJSON(t.inputSchema)}`);
+  }
+  return m;
+}
+const approvedPath = () => path.join(repoRoot(), '.atomic', 'mcp-approved.json');
+async function cmdMcp(sub) {
+  const cmd = parseCmdFlag();
+  let tools;
+  try { tools = await listToolsFromServer(cmd); } catch (e) { die(`could not list tools from [${cmd.join(' ')}]: ${e.message}`); }
+  const manifest = manifestOf(tools);
+  if (sub === 'scan' || !sub) {
+    console.log(`# capability manifest — ${tools.length} tools from [${cmd.join(' ')}]`);
+    for (const [n, h] of Object.entries(manifest)) console.log(`${h.slice(0, 16)}  ${n}`);
+    return process.exit(0);
+  }
+  if (sub === 'approve') {
+    fs.mkdirSync(path.dirname(approvedPath()), { recursive: true });
+    fs.writeFileSync(approvedPath(), JSON.stringify({ ts: new Date().toISOString(), count: tools.length, manifest }, null, 2) + '\n');
+    console.log(`approved ${tools.length} tool descriptors -> ${approvedPath()}`);
+    return process.exit(0);
+  }
+  if (sub === 'verify') {
+    if (!fs.existsSync(approvedPath())) die(`no approved manifest at ${approvedPath()} — run \`atomic mcp approve\` first`);
+    const approved = JSON.parse(fs.readFileSync(approvedPath(), 'utf8')).manifest || {};
+    const added = [], removed = [], changed = [];
+    for (const n of Object.keys(manifest)) { if (!(n in approved)) added.push(n); else if (approved[n] !== manifest[n]) changed.push(n); }
+    for (const n of Object.keys(approved)) if (!(n in manifest)) removed.push(n);
+    const clean = !added.length && !removed.length && !changed.length;
+    console.log(`MCP trust verify — ${tools.length} tools vs approved (${Object.keys(approved).length})`);
+    if (changed.length) console.log(`  CHANGED descriptor (tool-poisoning / schema-shadowing risk): ${changed.join(', ')}`);
+    if (added.length) console.log(`  ADDED unapproved tool (parasitic chaining risk): ${added.join(', ')}`);
+    if (removed.length) console.log(`  REMOVED tool (rug-pull risk): ${removed.join(', ')}`);
+    console.log(`  trust: ${clean ? 'GREEN — every tool descriptor matches the approved manifest' : 'RED — descriptor drift; review before trusting this server'}`);
+    return process.exit(clean ? 0 : 2);
+  }
+  die('usage: atomic mcp <scan|approve|verify> [--cmd "<server command>"]');
+}
+
 function cmdReplayUndo(verb, opId) {
   if (!opId) die(`usage: atomic ${verb} <opId>`);
   const t = loadTrace(opId);
@@ -247,8 +319,9 @@ switch (cmd) {
   case 'log': { const i = rest.indexOf('-n'); cmdLog(i >= 0 ? Number(rest[i + 1]) : undefined); break; }
   case 'compare': cmdCompare(); break;
   case 'init': cmdInit(); break;
+  case 'mcp': cmdMcp(rest[0]); break;
   case 'replay': case 'undo': cmdReplayUndo(cmd, rest[0]); break;
   default:
-    console.log('atomic — proof-chain CLI + governance\n  init [--force]            detect the repo + generate governance config\n  verify [<opId>|--head]    recompute the chain + check file state\n  explain <opId>            intention, proof, char diff, gate verdict\n  log [-n N]                walk the proof chain\n  compare                   run AtomicBench\n  replay|undo <opId>        (proof != content snapshot; see note)');
+    console.log('atomic — proof-chain CLI + governance + MCP trust firewall\n  init [--force]            detect the repo + generate governance config\n  verify [<opId>|--head]    recompute the chain + check file state\n  explain <opId>            intention, proof, char diff, gate verdict\n  log [-n N]                walk the proof chain\n  compare                   run AtomicBench\n  mcp <scan|approve|verify> [--cmd "<server>"]   capability manifest + tool-poisoning detection\n  replay|undo <opId>        (proof != content snapshot; see note)');
     process.exit(cmd ? 1 : 0);
 }

@@ -344,6 +344,25 @@ planned opt-in content layer (it will never invent content).
 
 ---
 
+## MCP trust firewall — defend against tool poisoning
+
+The MCP ecosystem's own attack surface is tool descriptors: poisoning, schema
+shadowing, rug pulls, parasitic chaining. `atomic mcp` pins them:
+
+```bash
+atomic mcp scan      [--cmd "<server>"]   # capability manifest: sha256(name ‖ description ‖ schema) per tool
+atomic mcp approve   [--cmd "<server>"]   # freeze the current descriptors as approved (.atomic/mcp-approved.json)
+atomic mcp verify    [--cmd "<server>"]   # re-scan + diff vs approved — GREEN or RED, exit 2 on drift
+```
+
+`verify` flags every **CHANGED** descriptor (poisoning / schema-shadowing),
+**ADDED** unapproved tool (parasitic chaining), and **REMOVED** tool (rug pull) —
+so a server whose tools silently mutated between sessions fails the gate before
+your agent trusts it. Defaults to auditing this server; point `--cmd` at any MCP
+server to audit it.
+
+---
+
 ## Honest limits
 
 - It does **not** raise the model's intelligence — on novel reasoning/code-gen

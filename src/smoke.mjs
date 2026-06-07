@@ -111,5 +111,22 @@ check('atomic init generates governance config', ini.status === 0 &&
   fs.existsSync(path.join(initDir, 'atomic-edit.protected.json')) &&
   fs.existsSync(path.join(initDir, 'atomic.agent-rules.md')));
 
+// MCP trust firewall: scan this server's descriptors, approve, then poisoning -> RED
+const mcpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'atomic-mcp-'));
+const serverCmd = `${process.execPath} ${path.join(dir, 'dist', 'server.js')}`;
+const mcp = (args) => spawnSync(process.execPath, [path.join(dir, 'atomic-cli.mjs'), 'mcp', ...args, '--cmd', serverCmd], { cwd: mcpDir, encoding: 'utf8' });
+const scan = mcp(['scan']);
+check('atomic mcp scan manifests tool descriptors', scan.status === 0 && /capability manifest — \d+ tools/.test(scan.stdout));
+const appr = mcp(['approve']);
+const vGreen = mcp(['verify']);
+check('atomic mcp verify GREEN against the approved manifest', appr.status === 0 && vGreen.status === 0 && /GREEN/.test(vGreen.stdout));
+const am = path.join(mcpDir, '.atomic', 'mcp-approved.json');
+const j = JSON.parse(fs.readFileSync(am, 'utf8'));
+const k0 = Object.keys(j.manifest)[0];
+j.manifest[k0] = '0'.repeat(64);
+fs.writeFileSync(am, JSON.stringify(j));
+const vRed = mcp(['verify']);
+check('atomic mcp verify detects descriptor poisoning (RED)', vRed.status === 2 && /RED/.test(vRed.stdout) && new RegExp(k0).test(vRed.stdout));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail > 0 ? 1 : 0);
