@@ -66,6 +66,28 @@ check('edit persisted (greet->salute)', after.includes('def salute(n)'));
 const esc = await rpc(4, 'tools/call', { name: 'atomic_replace_at', arguments: { file: '../escape.py', mode: 'content', anchor: 'x', newText: 'y' } });
 check('path-escape refused', txt(esc).toLowerCase().includes('escape') || txt(esc).includes('refused'));
 
+// transactional sessions: a named multi-edit window that rolls back or commits as one unit
+for (const t of ['atomic_session_begin', 'atomic_session_savepoint', 'atomic_session_rollback', 'atomic_session_commit']) {
+  check('tool present: ' + t, names.includes(t));
+}
+const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/;
+// begin -> edit -> rollback must RESTORE the begin snapshot
+const beginR = await rpc(5, 'tools/call', { name: 'atomic_session_begin', arguments: {} });
+const sid = (txt(beginR).match(UUID) ?? [])[0];
+check('atomic_session_begin returns a session id', !!sid);
+await rpc(6, 'tools/call', { name: 'atomic_replace_at', arguments: { file: 'm.py', mode: 'content', anchor: 'salute', newText: 'hail', occurrence: 1 } });
+check('edit inside session applied (salute->hail)', fs.readFileSync(path.join(work, 'm.py'), 'utf8').includes('def hail(n)'));
+await rpc(7, 'tools/call', { name: 'atomic_session_rollback', arguments: { sessionId: sid, close: true } });
+const restored = fs.readFileSync(path.join(work, 'm.py'), 'utf8');
+check('atomic_session_rollback restored the window (hail->salute)', restored.includes('def salute(n)') && !restored.includes('def hail(n)'));
+// begin -> edit -> commit must KEEP the edit and close the window
+const begin2 = await rpc(8, 'tools/call', { name: 'atomic_session_begin', arguments: {} });
+const sid2 = (txt(begin2).match(UUID) ?? [])[0];
+await rpc(9, 'tools/call', { name: 'atomic_replace_at', arguments: { file: 'm.py', mode: 'content', anchor: 'salute', newText: 'hail', occurrence: 1 } });
+const cm = await rpc(10, 'tools/call', { name: 'atomic_session_commit', arguments: { sessionId: sid2 } });
+check('atomic_session_commit kept the edit (salute->hail)', fs.readFileSync(path.join(work, 'm.py'), 'utf8').includes('def hail(n)'));
+check('atomic_session_commit emitted a receipt', /session|commit/i.test(txt(cm)));
+
 srv.kill('SIGKILL');
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail > 0 ? 1 : 0);

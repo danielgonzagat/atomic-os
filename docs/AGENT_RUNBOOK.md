@@ -4,7 +4,7 @@ This document describes how AI coding agents should operate with Atomic OS.
 
 ## Mission
 
-Convert the existing KLOEL product shell into a production-grade machine
+Convert an existing product shell into a production-grade machine
 without destroying the shell.
 
 ## Core Loop

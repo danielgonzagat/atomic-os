@@ -2534,7 +2534,7 @@ Atomic vence qualquer benchmark possível em qualquer condição.
 Isso é forte demais.
 Mas sim no sentido de:
 
-Atomic/Kloel OS tende a vencer arquiteturas normais de agentes CLI
+Atomic OS tende a vencer arquiteturas normais de agentes CLI
 em tarefas reais, complexas, multi-arquivo, com risco de regressão,
 onde correção, preservação, custo, tempo, trace, confiança e validação importam.
 

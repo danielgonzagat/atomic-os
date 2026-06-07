@@ -1,5 +1,5 @@
 /**
- * kloel-atomic-edit — MCP server that adds the sub-line action space the
+ * atomic-os — MCP server that adds the sub-line action space the
  * built-in coarse editors lack.
  *
  * Closes the "Line-Oriented Action Bottleneck" at exactly the layer the
@@ -37,8 +37,9 @@ import { registerToolsH } from './server-tools-h.js';
 import { registerToolsNative } from './server-tools-native.js';
 import { registerToolsNativeIo } from './server-tools-native-io.js';
 import { registerToolsLocate } from './server-tools-locate.js';
+import { registerToolsSession } from './server-tools-session.js';
 
-const server = new McpServer({ name: 'kloel-atomic-edit', version: '4.0.0' });
+const server = new McpServer({ name: 'atomic-os', version: '2.3.0' });
 
 registerToolsA(server);
 registerToolsB(server);
@@ -52,6 +53,7 @@ registerToolsH(server);
 registerToolsNative(server);
 registerToolsNativeIo(server);
 registerToolsLocate(server);
+registerToolsSession(server);
 
 async function main(): Promise<void> {
   const transport = new StdioServerTransport();

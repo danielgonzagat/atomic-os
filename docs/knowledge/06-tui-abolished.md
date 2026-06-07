@@ -42,7 +42,7 @@ whose result carries the char-level `atomicDiff` ([-removed-]{+added+}) +
 4. Same rule for Codex/OpenCode via the shared MCP (CLI_ACTIVATION_MATRIX).
 
 **Enforcement COMPLETE across all 3 CLIs (2026-05-16, branch
-feat/kloel-cognitive-organism):**
+<dev-branch>):**
 - Claude Code: `.claude/settings.json` PreToolUse →
   `scripts/mcp/atomic-edit/atomic-only-hook.mjs` DENIES Edit/Write/MultiEdit/
   NotebookEdit + Bash in-place code mutation + apply_patch on code-ext files

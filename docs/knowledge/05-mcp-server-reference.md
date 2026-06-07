@@ -41,7 +41,7 @@ server through the real production path (launcher → MCP stdio client) and it
 guard refused a stale-hash write; `code_outline` resolved symbols on a real
 file. Self-edited server still runs: tsc --strict 0 errors, smoke 43/43,
 OP_EXIT=0. Reproduce: `npx tsx scripts/mcp/atomic-edit/operational-use.ts`
-(and `demo-live.ts`). Committed to branch `feat/kloel-cognitive-organism`.
+(and `demo-live.ts`). Committed to branch `<dev-branch>`.
 NOTE: `mcp__atomic-edit__*` native tools require a fresh session (server was
 registered mid-session); the production-path proof above is equivalent.
 
@@ -70,7 +70,7 @@ gitignored; `guard.ts` ESM-safe (import.meta.url). Fixed the 30s MCP-handshake
 timeout (npx cold-resolve). VALIDATED: `opencode mcp list` → "✓ atomic-edit
 connected"; a real `opencode run -m deepseek/deepseek-v4-pro` autonomously
 called `atomic-edit_code_outline` and returned the correct symbol count.
-Commits on `feat/kloel-cognitive-organism`. To re-validate:
+Commits on `<dev-branch>`. To re-validate:
 `opencode mcp list`.
 
 **v4 GAP FIX — `atomic_replace_text` (2026-05-15):** the h13 PR#314 swarm
@@ -127,7 +127,7 @@ with it all wired (one regression introduced by L1-default dropping `diff` in
 preview → fixed by the preview-floors-L2 design, not by editing the test).
 Untracked `smoke.mjs` 45/8 = pre-existing live-fixture failures, proven not a
 regression (HEAD build = identical 45/8). **Committed locally** 3 units
-(`1f3068b81`, `f5e5763dc`, `dab313706`) on feat/kloel-cognitive-organism, all
+(`1f3068b81`, `f5e5763dc`, `dab313706`) on <dev-branch>, all
 guards green on the 6 E8 files. **PUSH BLOCKED** (objective, NOT bypassed):
 `prepush:scoped`→`guard:changed-eslint` validates the whole 515-file local
 backlog (origin tip far behind) → ~30+ eslint errors in concurrent-agent
