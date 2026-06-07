@@ -13,7 +13,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as ts from 'typescript';
-import { validate, type ValidationResult } from './engine.js';
+import { validate, type ValidationResult, TS_EXT, extOf } from './engine.js';
 import { resolveSymbol } from './symbols.js';
 export { previewDiff, characterDiff } from './advanced-diff.js';
 
@@ -60,6 +60,12 @@ export async function editSymbol(
   op: SymbolOp,
   code?: string,
 ): Promise<SymbolEditResult> {
+  if (!TS_EXT.has(extOf(file))) {
+    throw new Error(
+      `edit_symbol requires a TS/JS file, got ${extOf(file) || '(none)'}; ` +
+        `the universal multi-language edit_symbol is pending — use atomic_replace_at, atomic_ast_edit, or atomic_replace_between_anchors for other languages.`,
+    );
+  }
   const { Project, Node } = await import('ts-morph');
   const project = new Project({
     useInMemoryFileSystem: true,
@@ -156,6 +162,12 @@ export async function renameSymbolCrossFile(
 ): Promise<CrossFileRenameResult> {
   if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(newName)) {
     throw new Error(`invalid identifier: ${JSON.stringify(newName)}`);
+  }
+  if (!TS_EXT.has(extOf(absFile))) {
+    throw new Error(
+      `rename_symbol_cross_file requires a TS/JS file, got ${extOf(absFile) || '(none)'}; ` +
+        `cross-file rename needs type resolution — for other languages use a language server via atomic_apply_workspace_edit, or atomic_rename_symbol_universal for single-file scope.`,
+    );
   }
   const tsconfig = findNearestTsconfig(absFile, repoRoot);
   const { Project } = await import('ts-morph');
@@ -352,6 +364,12 @@ export async function renameMemberCrossFile(
 ): Promise<CrossFileRenameResult> {
   if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(newName)) {
     throw new Error(`invalid identifier: ${JSON.stringify(newName)}`);
+  }
+  if (!TS_EXT.has(extOf(absFile))) {
+    throw new Error(
+      `rename_member requires a TS/JS file, got ${extOf(absFile) || '(none)'}; ` +
+        `cross-file member rename needs type resolution — for other languages use a language server via atomic_apply_workspace_edit.`,
+    );
   }
   const { Project } = await import('ts-morph');
   const probe = new Project({ compilerOptions: { allowJs: true, noEmit: true } });

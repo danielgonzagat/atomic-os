@@ -88,6 +88,12 @@ const cm = await rpc(10, 'tools/call', { name: 'atomic_session_commit', argument
 check('atomic_session_commit kept the edit (salute->hail)', fs.readFileSync(path.join(work, 'm.py'), 'utf8').includes('def hail(n)'));
 check('atomic_session_commit emitted a receipt', /session|commit/i.test(txt(cm)));
 
+// safety: ts-morph-only tools must REFUSE a non-TS file cleanly (no silent corruption)
+const beforePy = fs.readFileSync(path.join(work, 'm.py'), 'utf8');
+const es = await rpc(11, 'tools/call', { name: 'atomic_edit_symbol', arguments: { file: 'm.py', selector: 'hail', op: 'replace', code: 'def hail(n):\n    return n\n' } });
+check('atomic_edit_symbol refuses a non-TS (.py) file cleanly', /TS\/JS|requires a TS/i.test(txt(es)));
+check('refused edit_symbol left the .py file untouched', fs.readFileSync(path.join(work, 'm.py'), 'utf8') === beforePy);
+
 srv.kill('SIGKILL');
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail > 0 ? 1 : 0);
