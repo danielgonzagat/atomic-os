@@ -297,6 +297,47 @@ async function cmdMcp(sub) {
   die('usage: atomic mcp <scan|approve|verify> [--cmd "<server command>"]');
 }
 
+// ── product-intent gate — did the change stay within the declared intent? ──
+function globToRe(g) {
+  const e = g.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*\*/g, ' ').replace(/\*/g, '[^/]*').replace(/ /g, '.*').replace(/\?/g, '.');
+  return new RegExp('^' + e + '$');
+}
+const matchAny = (file, globs) => globs.some((g) => globToRe(g).test(file));
+
+function cmdIntent(sub) {
+  const root = repoRoot();
+  const cfgP = path.join(root, 'atomic.intent.json');
+  if (sub && sub !== 'check') die('usage: atomic intent check [--base <ref>] [--run]');
+  if (!fs.existsSync(cfgP)) {
+    die(`no atomic.intent.json at ${root}. Declare the intent, e.g.:\n` +
+      JSON.stringify({ goal: 'improve PIX checkout', touch: ['src/checkout/**', 'src/payments/pix/**'], preserve: ['src/payments/card/**', 'src/affiliates/**', '**/*.lock'], verify: 'npm test' }, null, 2));
+  }
+  const cfg = JSON.parse(fs.readFileSync(cfgP, 'utf8'));
+  const bi = process.argv.indexOf('--base');
+  const base = bi >= 0 && process.argv[bi + 1] ? process.argv[bi + 1] : 'HEAD';
+  const r = spawnSync('git', ['-C', root, 'diff', '--name-only', base], { encoding: 'utf8' });
+  if (r.status !== 0) die('git diff failed (not a git repo, or bad base): ' + (r.stderr || '').trim().slice(0, 200));
+  const changed = r.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
+  const preserve = cfg.preserve || [], touch = cfg.touch || [];
+  const violations = changed.filter((f) => matchAny(f, preserve));
+  const outOfScope = touch.length ? changed.filter((f) => !matchAny(f, touch) && !violations.includes(f)) : [];
+  const inScope = changed.filter((f) => !violations.includes(f) && !outOfScope.includes(f));
+  console.log(`intent check @ ${root} (changed vs ${base})`);
+  console.log(`goal: ${cfg.goal || '(none declared)'}`);
+  console.log(`changed: ${changed.length} file(s) · in-scope: ${inScope.length}`);
+  if (outOfScope.length) console.log(`  OUT-OF-SCOPE (not matched by touch[]): ${outOfScope.join(', ')}`);
+  if (violations.length) console.log(`  PRESERVE VIOLATION (touched a protected path): ${violations.join(', ')}`);
+  let verifyOk = true;
+  if (cfg.verify && process.argv.includes('--run')) {
+    const v = spawnSync('bash', ['-lc', cfg.verify], { cwd: root, stdio: 'inherit' });
+    verifyOk = v.status === 0;
+    console.log(`  verify ("${cfg.verify}"): ${verifyOk ? 'PASS' : 'FAIL'}`);
+  }
+  const ok = !violations.length && !outOfScope.length && verifyOk;
+  console.log(`  verdict: ${ok ? 'GREEN — the change honored the declared product intent' : 'RED — the change drifted from the declared intent'}`);
+  process.exit(ok ? 0 : 2);
+}
+
 function cmdReplayUndo(verb, opId) {
   if (!opId) die(`usage: atomic ${verb} <opId>`);
   const t = loadTrace(opId);
@@ -320,8 +361,9 @@ switch (cmd) {
   case 'compare': cmdCompare(); break;
   case 'init': cmdInit(); break;
   case 'mcp': cmdMcp(rest[0]); break;
+  case 'intent': cmdIntent(rest[0]); break;
   case 'replay': case 'undo': cmdReplayUndo(cmd, rest[0]); break;
   default:
-    console.log('atomic — proof-chain CLI + governance + MCP trust firewall\n  init [--force]            detect the repo + generate governance config\n  verify [<opId>|--head]    recompute the chain + check file state\n  explain <opId>            intention, proof, char diff, gate verdict\n  log [-n N]                walk the proof chain\n  compare                   run AtomicBench\n  mcp <scan|approve|verify> [--cmd "<server>"]   capability manifest + tool-poisoning detection\n  replay|undo <opId>        (proof != content snapshot; see note)');
+    console.log('atomic — proof-chain CLI + governance + MCP trust firewall\n  init [--force]            detect the repo + generate governance config\n  verify [<opId>|--head]    recompute the chain + check file state\n  explain <opId>            intention, proof, char diff, gate verdict\n  log [-n N]                walk the proof chain\n  compare                   run AtomicBench\n  mcp <scan|approve|verify> [--cmd "<server>"]   capability manifest + tool-poisoning detection\n  intent check [--base <ref>] [--run]            verify a change stayed within the declared product intent\n  replay|undo <opId>        (proof != content snapshot; see note)');
     process.exit(cmd ? 1 : 0);
 }

@@ -128,5 +128,22 @@ fs.writeFileSync(am, JSON.stringify(j));
 const vRed = mcp(['verify']);
 check('atomic mcp verify detects descriptor poisoning (RED)', vRed.status === 2 && /RED/.test(vRed.stdout) && new RegExp(k0).test(vRed.stdout));
 
+// product-intent gate: a change touching a `preserve` path must be RED (git-guarded)
+if (spawnSync('git', ['--version'], { encoding: 'utf8' }).status === 0) {
+  const iDir = fs.mkdtempSync(path.join(os.tmpdir(), 'atomic-intent-'));
+  const git = (args) => spawnSync('git', ['-C', iDir, ...args], { encoding: 'utf8' });
+  git(['init', '-q']); git(['config', 'user.email', 'a@b.c']); git(['config', 'user.name', 't']);
+  fs.mkdirSync(path.join(iDir, 'src')); fs.mkdirSync(path.join(iDir, 'keep'));
+  fs.writeFileSync(path.join(iDir, 'src', 'a.txt'), '1\n');
+  fs.writeFileSync(path.join(iDir, 'keep', 'p.txt'), '1\n');
+  fs.writeFileSync(path.join(iDir, 'atomic.intent.json'), JSON.stringify({ goal: 'x', touch: ['src/**'], preserve: ['keep/**'] }));
+  git(['add', '-A']); git(['commit', '-qm', 'base']);
+  fs.writeFileSync(path.join(iDir, 'keep', 'p.txt'), '2\n'); // touch a preserved path
+  const ir = spawnSync(process.execPath, [path.join(dir, 'atomic-cli.mjs'), 'intent', 'check'], { cwd: iDir, encoding: 'utf8' });
+  check('atomic intent flags a preserve-path violation (RED)', ir.status === 2 && /PRESERVE VIOLATION/.test(ir.stdout));
+} else {
+  console.log('  SKIP  atomic intent check (git unavailable)');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail > 0 ? 1 : 0);

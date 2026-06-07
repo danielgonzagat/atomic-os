@@ -363,6 +363,30 @@ server to audit it.
 
 ---
 
+## Product-intent gate — did the change stay in scope?
+
+Declare the *product* intent of a change in `atomic.intent.json`:
+
+```jsonc
+{ "goal": "improve PIX checkout",
+  "touch": ["src/checkout/**", "src/payments/pix/**"],
+  "preserve": ["src/payments/card/**", "src/affiliates/**", "**/*.lock"],
+  "verify": "npm test" }
+```
+
+```bash
+atomic intent check [--base <ref>] [--run]
+```
+
+It diffs the working tree against the base and gates the change against the
+promise: every changed file must be matched by `touch[]` and **none** may match
+`preserve[]`. A change that edits a protected path (e.g. touches the card flow
+while "only improving PIX") is **RED** (exit 2), naming the violation; `--run`
+also runs the declared `verify` command. The agent doesn't just compile — it
+proves it preserved the rest of the product.
+
+---
+
 ## Honest limits
 
 - It does **not** raise the model's intelligence — on novel reasoning/code-gen
