@@ -159,6 +159,13 @@ spawnSync('git', ['add', 'blame.py'], { cwd: work });
 spawnSync('git', ['commit', '-qm', 'seed'], { cwd: work });
 const bl = cli(['blame', 'blame.py:1']);
 check('atomic blame resolves a line to its commit + atomic record', bl.status === 0 && /commit /.test(bl.stdout));
+// Trust-Compiler loop closure: incident -> gap -> MONOTONIC admission -> registry; enforce consults it
+const inc = cli(['incident', 'blame.py:1']);
+check('atomic incident closes the loop (gap -> monotonic gate admission, zero humans)', inc.status === 0 && /(LOOP CLOSED|no coverage gap)/.test(inc.stdout));
+const enf = cli(['enforce']);
+check('atomic enforce consults the admitted gate registry', enf.status === 0 && /(admitted gate|registry empty)/.test(enf.stdout));
+const rePath = path.join(work, '.atomic', 'gates', 'registry.json');
+check('admitted gate persisted to the self-expansion registry', !fs.existsSync(rePath) || /atomic-gate-registry/.test(fs.readFileSync(rePath, 'utf8')));
 
 // governance installer: `atomic init` detects a repo + generates config
 const initDir = fs.mkdtempSync(path.join(os.tmpdir(), 'atomic-init-'));

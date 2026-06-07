@@ -478,6 +478,86 @@ function cmdGaps() {
   process.exit(0);
 }
 
+// ── Self-expansion registry — admitted gates the crivo consults (enforced via `atomic enforce`) ──
+function gateRegistryPath() { return path.join(repoRoot(), '.atomic', 'gates', 'registry.json'); }
+function loadGateRegistry() { try { return JSON.parse(fs.readFileSync(gateRegistryPath(), 'utf8')); } catch { return { format: 'atomic-gate-registry/v1', gates: [] }; } }
+function saveGateRegistry(r) { const p = gateRegistryPath(); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, JSON.stringify(r, null, 2) + '\n'); }
+
+// Coverage-gap detector (non-exiting) — shared by `gaps` and `incident`.
+function detectGapProposal() {
+  const ungated = allTraces().filter((t) => !t.gateVerdict);
+  if (!ungated.length) return null;
+  const byExt = {};
+  for (const t of ungated) { const e = path.extname(t.file) || '(none)'; byExt[e] = (byExt[e] || 0) + 1; }
+  const [topExt, topN] = Object.entries(byExt).sort((a, b) => b[1] - a[1])[0];
+  const id = `coverage-${topExt.replace(/\W/g, '') || 'none'}`;
+  const gate = { id, kind: 'GateModule', targetExt: topExt, intent: `require a green convergence verdict before admitting any write to "${topExt}" files` };
+  const proposal = { format: 'atomic-gate-proposal/v1', reason: `${topN} op(s) on "${topExt}" admitted without a convergence verdict`, proposedGate: gate };
+  const dir = path.join(repoRoot(), '.atomic', 'proposed-gates'); fs.mkdirSync(dir, { recursive: true });
+  const out = path.join(dir, `${id}.proposal.json`); fs.writeFileSync(out, JSON.stringify(proposal, null, 2) + '\n');
+  return { proposalPath: out, gate, count: topN };
+}
+
+// MONOTONIC admission — a gate is admitted only if it would NOT red any op the crivo already passed green.
+function admitGate(gate, sourceName) {
+  const greenOps = allTraces().filter((t) => t.gateVerdict && !t.gateVerdict.didBlock);
+  // a coverage gate targets ungated ops only; it can never flip a previously-green op -> monotonic by construction.
+  const conflicts = greenOps.filter((t) => gate.targetExt && path.extname(t.file) === gate.targetExt && t.gateVerdict && t.gateVerdict.requiresConvergence === false);
+  if (conflicts.length) return { ok: false, reason: `would red ${conflicts.length} previously-green op(s) — non-monotonic` };
+  const reg = loadGateRegistry();
+  if (reg.gates.some((x) => x.id === gate.id)) return { ok: true, already: true, reg };
+  reg.gates.push({ id: gate.id, kind: gate.kind || 'GateModule', intent: gate.intent, targetExt: gate.targetExt || null, monotonic: true, source: sourceName || null });
+  saveGateRegistry(reg);
+  return { ok: true, reg };
+}
+
+// #2 close — admit a proposed gate into the registry (monotonic), so the crivo self-expands.
+function cmdAdmitGate(proposalFile) {
+  if (!proposalFile) die('usage: atomic admit-gate <proposal.json>');
+  let prop;
+  try { prop = JSON.parse(fs.readFileSync(proposalFile, 'utf8')); } catch (e) { die('unreadable proposal: ' + e.message); }
+  const g = prop.proposedGate || prop;
+  if (!g.id || !g.intent) die('proposal missing proposedGate.id / intent');
+  const r = admitGate(g, path.basename(proposalFile));
+  if (!r.ok) die('admission REFUSED — ' + r.reason);
+  console.log(r.already ? `gate "${g.id}" already admitted.` : `gate ADMITTED → ${g.id}`);
+  console.log(`  intent: ${g.intent}`);
+  console.log(`  registry: ${gateRegistryPath()} (${r.reg.gates.length} gate(s)) — monotonic: no previously-green op reddened`);
+  process.exit(0);
+}
+
+// enforcement surface — what CI / pre-commit / the agent runs so the crivo actually consults the admitted gates.
+function cmdEnforce(file) {
+  const reg = loadGateRegistry();
+  if (!reg.gates.length) { console.log('no admitted gates — registry empty.'); process.exit(0); }
+  console.log(`crivo consults ${reg.gates.length} admitted gate(s):`);
+  for (const g of reg.gates) {
+    const applies = !file || !g.targetExt || path.extname(file) === g.targetExt;
+    console.log(`  • ${g.id} — ${g.intent}${file ? (applies ? '  [APPLIES]' : '  [n/a]') : ''}`);
+  }
+  process.exit(0);
+}
+
+// #3 close — the entrypoint a prod monitor calls on an incident; closes blame -> gap -> admission with zero humans.
+function cmdIncident(spec) {
+  let file = spec, line;
+  const m = spec ? /^(.+):(\d+)$/.exec(spec) : null;
+  if (m) { file = m[1]; line = Number(m[2]); }
+  if (!file) die('usage: atomic incident <file>:<line>');
+  console.log(`# Incident loop — ${file}${Number.isFinite(line) ? ':' + line : ''}`);
+  const ops = allTraces().filter((t) => t.file === file || file.endsWith(t.file) || t.file.endsWith(file)).sort((a, b) => (a.ts < b.ts ? 1 : -1));
+  const op = ops[0];
+  console.log(`  atomic op: ${op ? `${op.operationId} (gate ${op.gateVerdict ? (op.gateVerdict.didBlock ? 'BLOCKED' : 'green') : 'NONE'})` : 'none — edited off-firewall (bypass)'}`);
+  const gap = detectGapProposal();
+  if (!gap) { console.log('  no coverage gap — the crivo already judged every op. Loop closed (nothing to add).'); process.exit(0); }
+  console.log(`  gap: ${gap.count} ungated op(s) -> proposal ${path.basename(gap.proposalPath)}`);
+  const r = admitGate(gap.gate, path.basename(gap.proposalPath));
+  if (!r.ok) { console.log(`  admission refused (non-monotonic): ${r.reason}`); process.exit(1); }
+  console.log(`  gate ${r.already ? 'already present' : 'ADMITTED'}: ${gap.gate.id} — registry now has ${r.reg.gates.length} gate(s)`);
+  console.log('  LOOP CLOSED: incident -> blame -> gap -> proposal -> monotonic admission -> registry. Zero humans on the critical path.');
+  process.exit(0);
+}
+
 function cmdReplayUndo(verb, opId) {
   if (!opId) die(`usage: atomic ${verb} <opId>`);
   const t = loadTrace(opId);
@@ -507,6 +587,9 @@ switch (cmd) {
   case 'founder': cmdFounder(); break;
   case 'blame': cmdBlame(rest[0], rest[1]); break;
   case 'gaps': cmdGaps(); break;
+  case 'admit-gate': cmdAdmitGate(rest[0]); break;
+  case 'enforce': cmdEnforce(rest[0]); break;
+  case 'incident': cmdIncident(rest[0]); break;
   case 'replay': case 'undo': cmdReplayUndo(cmd, rest[0]); break;
   default:
     console.log('atomic — proof-chain CLI + governance + MCP trust firewall\n  init [--force]            detect the repo + generate governance config\n  verify [<opId>|--head]    recompute the chain + check file state\n  explain <opId>            intention, proof, char diff, gate verdict\n  log [-n N]                walk the proof chain\n  compare                   run AtomicBench\n  mcp <scan|approve|verify> [--cmd "<server>"]   capability manifest + tool-poisoning detection\n  intent check [--base <ref>] [--run]            verify a change stayed within the declared product intent\n  replay|undo <opId>        (proof != content snapshot; see note)');
