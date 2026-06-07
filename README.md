@@ -315,6 +315,28 @@ edit left a replayable trace. Full table + method: [`docs/BENCHMARK.md`](docs/BE
 
 ---
 
+## The proof chain — semantic git for agents
+
+Every mutation appends a tamper-evident, content-addressed trace to
+`.atomic/traces/`, chained through `.atomic/HEAD`
+(`chainHash = sha256(parentSha256 ‖ afterSha256 ‖ canonicalJSON(gateVerdict))`).
+The `atomic` CLI reads that chain:
+
+```bash
+atomic verify [<opId>|--head]   # recompute the chain hash + check the file is still in the recorded state
+atomic explain <opId>           # intention, proof/audit block, char diff, gate verdict — human-readable
+atomic log [-n N]               # walk the proof chain, newest -> oldest
+atomic compare                  # run AtomicBench (atomic vs line/file rewrite)
+```
+
+`verify` recomputes the **same** hash the engine wrote — tamper with the parent
+pointer, the after-content, or the admitting gate verdict and it stops matching.
+`replay`/`undo` are honest about scope: traces are **proof artifacts, not content
+snapshots**, so live reversal is `atomic_session_rollback`; cold replay/undo is a
+planned opt-in content layer (it will never invent content).
+
+---
+
 ## Honest limits
 
 - It does **not** raise the model's intelligence — on novel reasoning/code-gen

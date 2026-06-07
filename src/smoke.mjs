@@ -95,5 +95,13 @@ check('atomic_edit_symbol refuses a non-TS (.py) file cleanly', /TS\/JS|requires
 check('refused edit_symbol left the .py file untouched', fs.readFileSync(path.join(work, 'm.py'), 'utf8') === beforePy);
 
 srv.kill('SIGKILL');
+
+// proof-chain CLI over the traces this run produced (.atomic/traces in `work`)
+const cli = (args) => spawnSync(process.execPath, [path.join(dir, 'atomic-cli.mjs'), ...args], { cwd: work, encoding: 'utf8' });
+const v = cli(['verify', '--head']);
+check('atomic verify --head recomputes the chain (VERIFIED)', v.status === 0 && /VERIFIED/.test(v.stdout));
+const lg = cli(['log']);
+check('atomic log walks the proof chain', /proof chain @/.test(lg.stdout) && /atomic_/.test(lg.stdout));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail > 0 ? 1 : 0);
