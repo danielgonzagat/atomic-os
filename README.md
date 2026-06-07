@@ -64,9 +64,12 @@ not hype, things you can run and check:
   rollback`. The universal engine is forced to *dry-run*, so it **physically
   cannot write** — only the firewall writes. A bad edit is **refused**, not
   written-then-regretted.
-- **Universal, by the right architecture.** Structural edit/search across **75
-  languages** via a native tree-sitter/ast-grep engine — not a per-language
-  catalog. One core, pluggable perception.
+- **Universal, by the right architecture.** Structural edit/search across **11
+  first-class tree-sitter grammars** (Python, JS, TS/TSX, Go, Ruby, Rust, Java,
+  C, C++, Bash, JSON) via a native tree-sitter/ast-grep engine — not a
+  per-language catalog. One core, pluggable perception; drop in any
+  `tree-sitter-<lang>` package to add another, and non-grammar files degrade
+  cleanly to byte/range-validated edits.
 - **Dominance is measurable.** A built-in **bypass-rate meter** counts every time
   the agent reaches for raw Bash/Edit when an atomic tool existed — so "better
   than the factory editor" is a number you drive toward zero, not a slogan.

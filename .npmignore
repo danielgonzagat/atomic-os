@@ -1,0 +1,13 @@
+# Dev-only files pruned from the published tarball (the `files` allowlist in
+# package.json is the primary control; this prunes within shipped dirs).
+src/**/*.test.ts
+src/**/*.test.mjs
+src/**/*.test-cases.mjs
+src/benchmark.ts
+src/demo-live.ts
+src/operational-use.ts
+# Runtime/session artifacts that must never ship
+src/.positive-byte-sessions/
+src/atomic-exec-broker-file-*/
+src/atomic-universal-*/
+**/*.log

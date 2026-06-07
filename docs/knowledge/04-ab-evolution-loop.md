@@ -12,7 +12,7 @@ A/B self-improvement loop until the atomic OS beats the normal/factory CLI
 agent by a huge, undeniable margin on every benchmark that matters. Governed
 by [[feedback_atomic_action_principle]].
 
-**Harness** (`/Users/danielpenin/whatsapp_saas-ab/`, sibling of repo, not
+**Harness** (`<your-repo>-ab/`, sibling of repo, not
 git-tracked): branch `ab/atomic-harness` (moving base, advances each round to
 carry atomic-OS improvements). Files: `TASK.txt` (identical complex task),
 `run-round` (recreates ws-normal/ws-atomic worktrees, symlinks node_modules,
@@ -1837,7 +1837,7 @@ attack next sink (native Read ×6 = 58K; code_outline 5.4K×2), else if ≥2×
 **Blocker-unlock proven:** orchestrator session's atomic-edit MCP can die;
 fix = spawn a FRESH headless `claude -p` worker (its MCP loads at startup) to
 edit `scripts/mcp/atomic-edit/*.ts` via mcp__atomic-edit__* (mandated tool),
-then commit to `ab/atomic-harness`. Harness: `/Users/danielpenin/whatsapp_saas-ab/`
+then commit to `ab/atomic-harness`. Harness: `<your-repo>-ab/`
 `launch-tooldev` + `tooldev-task.txt` (atomic-only enforced; --max-turns 120).
 
 **Server upgrade SHIPPED & validated (ab/atomic-harness @ 727619577, smoke
@@ -1898,7 +1898,7 @@ turns). run-round manual already set to: code_outline → ONE
 atomic_decompose_file → 1 verify. This directly removes the only remaining
 isolated bottleneck (the R9-R14 4-7min model plan/compose turn).
 
-IMMEDIATE NEXT (fresh session): just `bash /Users/danielpenin/whatsapp_saas-ab/run-round 15`
+IMMEDIATE NEXT (fresh session): just `bash <your-repo>-ab/run-round 15`
 then launch-normal + launch-atomic + monitor + `node score 15`. Expect atomic
 to finally beat normal on turns/tokens/cost (it already wins correctness/
 safety/structure; tok already 2.84M→1.47M from prior upgrades). If atomic
@@ -1965,7 +1965,7 @@ in round results.
 ab/atomic-harness HEAD = `0577753bb` (= full compiling OS: atomic_create_file,
 fail-closed airtight hook, compact results, refuse-overwrite/surgical-trim).
 The R9/R10 manual changes (read-once, anti-fragmentation) live ONLY in
-`/Users/danielpenin/whatsapp_saas-ab/run-round` (harness, not committed).
+`<your-repo>-ab/run-round` (harness, not committed).
 
 **Verdict (A/B evidence, valid rounds 5–10):** Atomic OS = **correct every
 round, structurally superior (svc ~200–250 vs ~250–340), 0 cheats/escapes

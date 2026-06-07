@@ -32,7 +32,7 @@ whose result carries the char-level `atomicDiff` ([-removed-]{+added+}) +
 2. If `mcp__atomic-edit__*` is NOT in the session tool list, the server is
    not loaded → say so honestly and do not silently fall back to native
    Edit. Enablement: `.mcp.json` has `atomic-edit`; `~/.claude.json`
-   `projects["/Users/danielpenin/whatsapp_saas"].enabledMcpjsonServers` must
+   `projects["<your-repo>"].enabledMcpjsonServers` must
    include `"atomic-edit"` (set 2026-05-15) AND a fresh session is required
    (MCP loads at session start; mid-session `.mcp.json`/enable changes do
    NOT hot-load — documented limitation). See [[feedback_mcp_project_approval]].

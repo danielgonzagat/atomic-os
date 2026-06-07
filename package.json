@@ -1,10 +1,31 @@
 {
   "name": "atomic-os",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "private": false,
   "description": "Atomic OS — a 64-tool structured-read + atomic-edit MCP that turns any AI CLI agent into a surgical, verifiable, universal (multi-language) code engineer. Every mutation flows through a firewall: sha256 + syntax-validate + char-level trace + protected-file guard + rollback. Content/anchor-addressed editing (no line/column math), multi-file atomic transactions, LSP WorkspaceEdit apply, native ripgrep/glob/tree-sitter, and a bypass-rate meter.",
   "license": "MIT",
   "type": "commonjs",
+  "author": "danielgonzagat",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/danielgonzagat/atomic-os.git"
+  },
+  "homepage": "https://github.com/danielgonzagat/atomic-os#readme",
+  "bugs": {
+    "url": "https://github.com/danielgonzagat/atomic-os/issues"
+  },
+  "files": [
+    "src",
+    "docs/INSTALL.md",
+    "docs/OPERATING_GUIDE.md",
+    "docs/AGENTS.md",
+    "docs/AGENT_RUNBOOK.md",
+    "integrations",
+    "atomic-edit.protected.example.json",
+    "tsconfig.json",
+    "README.md",
+    "LICENSE"
+  ],
   "bin": {
     "atomic-os": "src/atomic-edit-mcp-launcher.sh"
   },
@@ -12,7 +33,8 @@
     "build": "node src/build.mjs",
     "start": "bash src/atomic-edit-mcp-launcher.sh",
     "smoke": "node src/smoke.mjs",
-    "test": "node src/smoke.mjs"
+    "test": "node src/smoke.mjs",
+    "prepublishOnly": "node src/build.mjs"
   },
   "engines": {
     "node": ">=20"

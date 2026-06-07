@@ -1,7 +1,7 @@
 # Atomic-Edit — Multi-CLI Activation Matrix
 
 One shared tool — the `atomic-edit` MCP server
-(`scripts/mcp/atomic-edit-mcp-launcher.sh`, 15 tools, `node dist/server.js`,
+(`src/atomic-edit-mcp-launcher.sh`, 64 tools, `node dist/server.js`,
 self-building) — connected as the **default operating mode** for every AI CLI
 in this workspace. The coarse mainstream editor is banned for code; the
 authorial hierarchical/atomic mode is the persistent default.
@@ -35,7 +35,7 @@ tools · 4 obeys the LEI/operating rule · 5 records progress · 6 workboard/loc
 | 5 progress  | PROGRESS.md                                                                                                                                                   |
 | 6 workboard | fleet runner staggered pool; per-task supervised                                                                                                              |
 | 7 **proof** | ✅ multiple blind tests 2026-05-15: rename/literal/property/symbol unprompted, zero builtin fallback, byte-correct; h13 swarm validated under hardening       |
-| 8 limits    | guard restricts writes to KLOEL repo; non-TS/JS/JSON = range-only validation                                                                                  |
+| 8 limits    | guard restricts writes to the configured repo root; non-TS/JS/JSON = range-only validation                                                                                  |
 | 9 next      | none — operating; default for fleet subagents                                                                                                                 |
 
 ## Codex CLI

@@ -1,6 +1,6 @@
-# KLOEL Agent Runbook
+# Atomic OS Agent Runbook
 
-This document describes how AI coding agents should operate inside KLOEL.
+This document describes how AI coding agents should operate with Atomic OS.
 
 ## Mission
 

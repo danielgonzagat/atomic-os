@@ -4,7 +4,7 @@
 
 This machine runs ONE shared structured-action-space tool across all CLIs
 (Claude Code, Codex, OpenCode): the `atomic-edit` MCP server
-(`/Users/danielpenin/whatsapp_saas/scripts/mcp/atomic-edit-mcp-launcher.sh`),
+(`<your-repo>/scripts/mcp/atomic-edit-mcp-launcher.sh`),
 registered for Codex in `~/.codex/config.toml` `[mcp_servers.atomic-edit]`.
 Its tools appear as `atomic-edit__*` (READ: `code_browse`/`code_outline`/
 `code_read_symbol`; EDIT: `atomic_replace_text`/`replace_range`/`insert_at`/
@@ -76,7 +76,7 @@ adoption proof.
 Quick health check for future Codex sessions:
 
 ```sh
-/Users/danielpenin/.codex/skills/atomic-code-editing/scripts/smoke-atomic-code-editing.mjs
+~/.codex/skills/atomic-code-editing/scripts/smoke-atomic-code-editing.mjs
 ```
 
 It validates the standalone Codex CLIs without relying on repo MCP tools:

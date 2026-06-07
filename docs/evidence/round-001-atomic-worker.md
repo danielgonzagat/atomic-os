@@ -14,7 +14,7 @@
 Worker B did not complete the benchmark. `npm --prefix worker run lint:check`
 still failed in the assigned worktree with the original 88-error baseline,
 because the shared `mcp__atomic_edit__` server in this session was rooted at
-`/Users/danielpenin/whatsapp_saas` and refused absolute paths into
+`<your-repo>` and refused absolute paths into
 `/private/tmp/kloel-ab-atomic-20260516135731`.
 
 Important side effect: 58 atomic mutating edits were applied before this was
