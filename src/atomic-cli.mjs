@@ -18,10 +18,55 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
 import { spawnSync, spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
+
+// #1 Proof-Carrying Edits — RE-EXEC core, imported from the COMPILED dist/ (the same
+// engine.validate + Merkle/seal logic the producer used to BUILD the proof; there is no
+// drift-prone second re-implementation). Lazy + memoized: only `prove`/`verify-proof
+// --reexec` need it, and a missing/stale dist degrades to the hash-only path with an
+// honest note rather than crashing the whole CLI.
+let _reexecMod = null;
+async function loadReexec() {
+  if (_reexecMod) return _reexecMod;
+  const candidate = path.join(here, 'dist', 'engine-proof-reexec.js');
+  if (!fs.existsSync(candidate)) return null;
+  try {
+    _reexecMod = await import(pathToFileURL(candidate).href);
+    return _reexecMod;
+  } catch {
+    return null;
+  }
+}
+
+// Ordered list of every op afterSha256 in chain order (genesis → HEAD) — the Merkle
+// leaves the session snapshot commits to. Walks parentSha256 ← chainHash links so the
+// order is the canonical chain order, not readdir order.
+function sessionAfterLeaves() {
+  const traces = allTraces();
+  const byChain = new Map(traces.map((t) => [t.chainHash, t]));
+  // Find the chain head: a chainHash that is no other trace's parent. Fall back to HEAD.
+  const parents = new Set(traces.map((t) => t.parentSha256).filter(Boolean));
+  let head = headChain();
+  if (!head || !byChain.has(head)) {
+    const tip = traces.find((t) => !parents.has(t.chainHash));
+    head = tip ? tip.chainHash : '';
+  }
+  // Walk backward from head to genesis, then reverse to genesis→head order.
+  const order = [];
+  let cur = head;
+  const guard = new Set();
+  while (cur && byChain.has(cur) && !guard.has(cur)) {
+    guard.add(cur);
+    const t = byChain.get(cur);
+    order.push(t);
+    cur = t.parentSha256;
+  }
+  order.reverse();
+  return order.map((t) => t.afterSha256);
+}
 
 // EXACT replica of trace.ts canonicalJSON — sorted keys at every depth, undefined->null.
 function canonicalJSON(value) {
@@ -339,7 +384,7 @@ function cmdIntent(sub) {
 }
 
 // ── Proof-Carrying Edits — export a portable, independently-verifiable artifact ──
-function cmdProve(opId) {
+async function cmdProve(opId) {
   if (!opId) die('usage: atomic prove <opId>');
   const t = loadTrace(opId);
   if (!t) die(`no trace for ${opId}`);
@@ -361,18 +406,64 @@ function cmdProve(opId) {
     chainHash: t.chainHash,
     verifier: 'atomic verify-proof <file> — recomputes sha256(parentSha256 ‖ afterSha256 ‖ canonicalJSON(gateVerdict)) and asserts it equals chainHash. No repo, no trust in the producer.',
   };
+
+  // ── #1 Proof-Carrying Edits: embed the RE-EXECUTABLE proof body (re-exec snapshot +
+  // Merkle inclusion + gateRunId + decision tree + seal) when the dist re-exec core is
+  // available AND this op carries a content snapshot. The v1 hash-only fields above are
+  // ALWAYS kept (back-compat); the re-exec body is strictly additive. A missing dist or
+  // snapshot degrades honestly to a hash-only proof with a recorded reason.
+  const rx = await loadReexec();
+  if (!rx) {
+    artifact.reexec = { available: false, reason: 'dist/engine-proof-reexec.js not built — hash-only proof (run the build, then re-run prove)' };
+  } else if (!t.snapshotPath) {
+    artifact.reexec = { available: false, reason: 'this op carries no content snapshot (.atomic/snapshots) — hash-only proof; only ops written with content can be re-executed' };
+  } else {
+    const snapAbs = t.repoRoot ? path.join(t.repoRoot, t.snapshotPath) : path.join(repoRoot(), t.snapshotPath);
+    if (!fs.existsSync(snapAbs)) {
+      artifact.reexec = { available: false, reason: `recorded snapshotPath ${t.snapshotPath} not found on disk — hash-only proof` };
+    } else {
+      let snap;
+      try { snap = JSON.parse(fs.readFileSync(snapAbs, 'utf8')); } catch { snap = null; }
+      const leaves = sessionAfterLeaves();
+      const leafIndex = leaves.indexOf(t.afterSha256);
+      if (!snap || leafIndex < 0) {
+        artifact.reexec = { available: false, reason: 'snapshot unreadable or op afterSha256 absent from the session leaf set — hash-only proof' };
+      } else {
+        // Build the full re-exec body with the SAME core the verifier will re-run.
+        const body = rx.buildReexecProofBody({
+          snapshot: snap,
+          sessionAfterLeaves: leaves,
+          leafIndex,
+          gateVerdict: t.gateVerdict ?? null,
+          parentSha256: t.parentSha256 ?? '',
+          chainHash: t.chainHash,
+          validation: t.validation ?? null,
+          preferEnvKey: process.env.ATOMIC_PROOF_SEAL_KEY ? true : false,
+        });
+        artifact.reexec = { available: true, ...body };
+        artifact.verifierReexec = 'atomic verify-proof <file> --reexec — re-runs engine.validate(file, before, after) over the embedded snapshot and asserts the recorded verdict REPRODUCES; re-derives the Merkle root from the embedded leaf+path; recomputes the gateRunId; and re-checks the seal. No repo, no trust in the producer.';
+      }
+    }
+  }
+
   const dir = path.join(repoRoot(), '.atomic', 'proofs');
   fs.mkdirSync(dir, { recursive: true });
   const out = path.join(dir, `${t.operationId}.proof.json`);
   fs.writeFileSync(out, JSON.stringify(artifact, null, 2) + '\n');
   console.log(`proof-carrying edit → ${out}`);
   console.log(`  chainHash ${t.chainHash}`);
+  if (artifact.reexec?.available) {
+    console.log(`  re-exec   embedded — snapshot + Merkle leaf ${artifact.reexec.merkle?.leafIndex}/${artifact.reexec.merkle?.leafCount} + gateRunId ${artifact.reexec.gateRunId} + seal (${artifact.reexec.seal?.keyId})`);
+    console.log(`  re-execute anywhere (no repo needed): atomic verify-proof ${out} --reexec`);
+  } else {
+    console.log(`  re-exec   not embedded — ${artifact.reexec?.reason ?? 'unavailable'} (hash-only proof)`);
+  }
   console.log(`  re-verify anywhere (no repo needed): atomic verify-proof ${out}`);
   process.exit(0);
 }
 
-function cmdVerifyProof(file) {
-  if (!file) die('usage: atomic verify-proof <proof.json>');
+async function cmdVerifyProof(file, reexec = false) {
+  if (!file) die('usage: atomic verify-proof <proof.json> [--reexec]');
   if (!fs.existsSync(file)) die(`no such proof file: ${file}`);
   let a;
   try { a = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { die(`unreadable proof: ${e.message}`); }
@@ -386,8 +477,59 @@ function cmdVerifyProof(file) {
   console.log(`  gates       ${gv ? (gv.didBlock ? 'BLOCKED' : 'admitted (green)') : '(no gate verdict captured)'}`);
   console.log(`  syntax      before=${a.validation?.syntaxErrorsBefore ?? '?'} after=${a.validation?.syntaxErrorsAfter ?? '?'}`);
   console.log(`  afterSha256 ${a.afterSha256}`);
-  console.log(`  verdict     ${ok ? 'VERIFIED — independently, without the repo or trusting the producer' : 'FAILED'}`);
-  process.exit(ok ? 0 : 2);
+
+  // ── #1 Proof-Carrying Edits: --reexec RE-EXECUTES the construction rather than only
+  // re-hashing it. Four producer-untrusted checks over the embedded re-exec body:
+  //   (1) re-run engine.validate(file, before, after) over the snapshot → verdict reproduces
+  //   (2) re-derive the Merkle root from the embedded leaf + path → equals the claimed root
+  //   (3) recompute the gateRunId from (verdict ‖ after ‖ parent) → equals the embedded id
+  //   (4) recompute the seal over the canonical final-state body → equals the embedded mac
+  // Plus prints the full per-gate decision tree carried in the body.
+  let reexecOk = true;
+  if (reexec) {
+    const rx = await loadReexec();
+    const body = a.reexec;
+    if (!rx) {
+      reexecOk = false;
+      console.log(`  re-exec     UNAVAILABLE — dist/engine-proof-reexec.js not built on this verifier (run the build, then re-run --reexec)`);
+    } else if (!body || body.available === false) {
+      reexecOk = false;
+      console.log(`  re-exec     ABSENT — this proof carries no re-executable body${body?.reason ? ` (${body.reason})` : ''}; only \`prove\` on a content-snapshotted op embeds it`);
+    } else if (body.reexecVersion !== 'atomic-proof-reexec/v2') {
+      reexecOk = false;
+      console.log(`  re-exec     VERSION — unsupported re-exec body version ${body.reexecVersion ?? '(none)'}`);
+    } else {
+      // (1) re-exec engine.validate over the embedded before/after snapshot.
+      const r = rx.reexecValidate(body.snapshot, a.validation ?? null, a.afterSha256);
+      // (2) Merkle inclusion: re-derive the root from leaf + path, and bind to this op.
+      const merkleOk = !!body.merkle && typeof body.merkle.leaf === 'string' && rx.verifyMerkleProof(body.merkle);
+      const leafBinds = body.snapshot && rx.buildSnapshot(body.snapshot.file, body.snapshot.before, body.snapshot.after).afterSha256 === a.afterSha256;
+      // (3) gateRunId recompute over the bound triple.
+      const gateRunIdRecomputed = rx.gateRunIdOf(a.gateVerdict ?? null, a.afterSha256, a.parentSha256 ?? '');
+      const gateRunIdOk = gateRunIdRecomputed === body.gateRunId;
+      // (4) seal recompute over the canonical final-state body.
+      const reexecBits = a.validation
+        ? { language: r.recomputed.language, before: r.recomputed.before, after: r.recomputed.after, ok: r.recomputed.ok }
+        : null;
+      const sealRes = rx.verifySeal(
+        { merkleRoot: body.merkle.root, leaf: body.merkle.leaf, gateRunId: body.gateRunId, chainHash: a.chainHash, reexec: reexecBits },
+        body.seal,
+      );
+      reexecOk = r.reproduces && merkleOk && leafBinds && gateRunIdOk && sealRes.ok;
+      console.log(`  re-exec     (1) validate  ${r.reproduces ? 'REPRODUCES — re-ran engine.validate; recorded verdict matches' : `DIVERGED — ${r.note}`}`);
+      console.log(`              (2) merkle    ${merkleOk && leafBinds ? `root re-derived from leaf+path (member ${body.merkle.leafIndex}/${body.merkle.leafCount})` : 'FAILED — leaf/path does not re-derive the root, or leaf does not bind this op'}`);
+      console.log(`              (3) gateRunId ${gateRunIdOk ? `recomputes (${body.gateRunId})` : 'FAILED — recomputed gateRunId != embedded'}`);
+      console.log(`              (4) seal      ${sealRes.ok ? sealRes.note : `FAILED — ${sealRes.note}`}`);
+      console.log(`  decision tree (${body.decisionTree?.length ?? 0} gate${(body.decisionTree?.length ?? 0) === 1 ? '' : 's'}):`);
+      for (const n of body.decisionTree ?? []) {
+        console.log(`    · ${n.gate.padEnd(24)} ${n.decision.toUpperCase().padEnd(12)} ${n.fact}${n.locus ? ` @ ${n.locus}` : ''}`);
+      }
+    }
+  }
+
+  const allOk = ok && reexecOk;
+  console.log(`  verdict     ${allOk ? `VERIFIED — independently${reexec ? ' + RE-EXECUTED' : ''}, without the repo or trusting the producer` : 'FAILED'}`);
+  process.exit(allOk ? 0 : 2);
 }
 
 // ── #4 Founder-facing continuous proof — aggregate per-op audit blocks into one report ──
@@ -421,8 +563,44 @@ function cmdFounder() {
   process.exit(0);
 }
 
+// ── #3 Causal blame (STRONG form) — sessionId linkage + recovered re-crivo + named false-negative gate ──
+// Loads the COMPILED engine (dist/engine-causal-blame.js, same idiom as proof-chain.proof.mjs)
+// and prints the four-step forensic report. Degrades loudly (never throws) when the dist is absent
+// so the legacy file+timestamp print below still runs as the floor. Returns true iff it printed.
+async function runCausalBlame(file, locus) {
+  let engine;
+  try {
+    engine = await import(path.join(here, 'dist', 'engine-causal-blame.js'));
+  } catch (e) {
+    console.log(`  (strong-form blame unavailable — compiled engine not built: ${e instanceof Error ? e.message : e})`);
+    console.log('  run: node scripts/mcp/atomic-edit/build.mjs   then re-run blame for sessionId linkage + recovered re-crivo.');
+    return false;
+  }
+  const report = await engine.causalBlame(repoRoot(), file, locus);
+  const link = report.link;
+  if (link) {
+    console.log(`  session   ${link.sessionId || '(legacy trace — no sessionId; degraded to file+timestamp)'}`);
+    console.log(`  linked by ${link.linkedBy}${link.commit ? ` · commit ${link.commit.slice(0, 12)}` : ''}`);
+  }
+  const rec = report.recovered;
+  if (rec) {
+    console.log(`  recovered before/after: ${rec.after === null ? 'UNRECOVERABLE' : rec.afterVerified ? 'VERIFIED (after hashes to op.afterSha256)' : 'UNVERIFIED (indicative only)'}`);
+  }
+  const fn = report.falseNegative;
+  if (fn) {
+    console.log(`  re-crivo  ${report.reCrivo?.run ? `${report.reCrivo.ran.length} gate(s) ran · ${report.reCrivo.run.reds.length} red · ${report.reCrivo.run.unjudged.length} unjudged` : '(no recovered bytes to judge)'}`);
+    console.log(`  FALSE NEGATIVE GATE: ${fn.gate}  [${fn.verdict}]`);
+    console.log(`    ${fn.reason}`);
+  }
+  if (report.recalibrationPath) console.log(`  recalibration record → ${path.relative(repoRoot(), report.recalibrationPath)}`);
+  if (report.proposalPath) console.log(`  #2 proposal fed → ${path.relative(repoRoot(), report.proposalPath)}`);
+  for (const n of report.notes) console.log(`  · ${n}`);
+  return true;
+}
+
 // ── #3 Causal blame — map a defect line to the atomic op that introduced it + its gate verdict ──
-function cmdBlame(spec, maybeLine) {
+// ── #3 Causal blame — map a defect line to the atomic op that introduced it + its gate verdict ──
+async function cmdBlame(spec, maybeLine) {
   let file = spec, line = Number(maybeLine);
   const m = spec ? /^(.+):(\d+)$/.exec(spec) : null;
   if (m) { file = m[1]; line = Number(m[2]); }
@@ -446,6 +624,10 @@ function cmdBlame(spec, maybeLine) {
   console.log(`  atomic op ${op.operationId} (${op.operator} · ${op.ts})`);
   console.log(`  gate verdict: ${gv ? (gv.didBlock ? 'BLOCKED' : 'admitted green') : 'NONE — admitted without a convergence verdict (coverage gap)'}`);
   console.log(`  -> if this line is a defect: the gate that admitted it is the recalibration target. Close the loop with: atomic gaps`);
+  // STRONG form (#3 complete): sessionId linkage + recovered before/after + re-run the crivo +
+  // name the false-negative gate + write the recalibration record + feed the #2 pipeline.
+  // The lines above are the floor (always printed); this augments them when the engine is built.
+  await runCausalBlame(file, Number.isFinite(line) ? `L${line}` : undefined);
   process.exit(0);
 }
 
@@ -483,8 +665,137 @@ function gateRegistryPath() { return path.join(repoRoot(), '.atomic', 'gates', '
 function loadGateRegistry() { try { return JSON.parse(fs.readFileSync(gateRegistryPath(), 'utf8')); } catch { return { format: 'atomic-gate-registry/v1', gates: [] }; } }
 function saveGateRegistry(r) { const p = gateRegistryPath(); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, JSON.stringify(r, null, 2) + '\n'); }
 
+// ── #2 self-improving Gate Lattice (CLI side) — the REAL signal + the REAL monotonic verifier ──
+// The corpus of KNOWN-GOOD edits: every GREEN trace's reconstructable before→after
+// bytes. A trace stores hashes, not full content, so `after` is the file's current
+// on-disk bytes WHEN it is unchanged since the op (afterSha256 matches); otherwise
+// the edit can no longer be faithfully reconstructed and is SKIPPED — never guessed.
+// This mirrors engine-gate-registry.readKnownGoodCorpus so the CLI admission run and
+// the engine admission run judge the same corpus.
+function readKnownGoodCorpus() {
+  const root = repoRoot();
+  const out = [];
+  for (const t of allTraces()) {
+    const wasGreen = !t.gateVerdict || (t.gateVerdict.green !== false && t.gateVerdict.didBlock !== true && !(t.gateVerdict.reds && t.gateVerdict.reds.length));
+    if (!wasGreen || !t.file) continue;
+    const abs = t.repoRoot ? path.join(t.repoRoot, t.file) : path.join(root, t.file);
+    let onDisk;
+    try { onDisk = fs.readFileSync(abs, 'utf8'); } catch { continue; }
+    if (t.afterSha256 && sha256(onDisk) !== t.afterSha256) continue; // file changed since → cannot reconstruct exactly
+    const be = t.byteEffect || {};
+    out.push({ file: t.file, before: typeof be.beforeContent === 'string' ? be.beforeContent : '', after: typeof be.afterContent === 'string' ? be.afterContent : onDisk, operationId: t.operationId });
+  }
+  return out;
+}
+
+// Recorded prod incidents — one JSON object per line in .atomic/incidents/incidents.jsonl,
+// each naming a file (and optional locus/symptom) that broke in production. This is the
+// "prod-broke" half of the lattice's real gap signal; a prod monitor / on-call appends here.
+function readIncidents() {
+  const p = path.join(repoRoot(), '.atomic', 'incidents', 'incidents.jsonl');
+  let raw;
+  try { raw = fs.readFileSync(p, 'utf8'); } catch { return []; }
+  const out = [];
+  for (const line of raw.split('\n')) {
+    const t = line.trim();
+    if (!t) continue;
+    try { const r = JSON.parse(t); if (r && typeof r.file === 'string') out.push(r); } catch { /* partial/corrupt line → skip */ }
+  }
+  return out;
+}
+
+// THE REAL gap: the delta "all-gates-passed vs prod-broke". Intersect recorded prod
+// incidents with the GREEN known-good corpus on file — the result is the set of edits
+// the lattice admitted GREEN that an incident later proved defective. Those green-but-
+// broken edits are the witness corpus a NEW gate must learn to red. Empty when no
+// incident has been recorded (then there is no proven blind spot — only the weak
+// ungated-ops fallback signal applies).
+function detectIncidentGap() {
+  const incidents = readIncidents();
+  if (!incidents.length) return [];
+  const corpus = readKnownGoodCorpus();
+  const byFile = new Map(corpus.map((e) => [e.file, e]));
+  const root = repoRoot();
+  const out = [];
+  const seen = new Set();
+  for (const inc of incidents) {
+    const rel = path.isAbsolute(inc.file) ? path.relative(root, inc.file) : inc.file;
+    const hit = byFile.get(inc.file) || byFile.get(rel);
+    if (hit && !seen.has(hit.file)) { out.push(hit); seen.add(hit.file); }
+  }
+  return out;
+}
+
+// Load a candidate gate's EXECUTABLE module (a real GateModule: `export function gate(ctx){…}`)
+// and return its callable. null when the module is missing / exports no gate (an
+// unloadable proposal can never be admitted — admission requires a real runnable fact).
+async function loadCandidateGate(modulePath) {
+  const abs = path.isAbsolute(modulePath) ? modulePath : path.join(repoRoot(), modulePath);
+  if (!fs.existsSync(abs)) return null;
+  try {
+    const mod = await import(pathToFileURL(abs).href);
+    const cand = typeof mod.gate === 'function' ? mod : mod.default;
+    if (!cand || typeof cand.gate !== 'function') return null;
+    return { id: cand.id || null, appliesTo: cand.appliesTo, gate: cand.gate };
+  } catch { return null; }
+}
+
+// THE REAL monotonic admission verifier: run the candidate gate over the known-good
+// corpus and admit ONLY if it reds NONE of those edits. A `red` on a previously-green
+// edit is a monotonicity violation (it retroactively flips an admitted edit). An
+// `unjudged`/throw is NOT a conflict (honest abstention does not flip a verdict). This
+// is the check the old no-op was reaching for: it referenced t.gateVerdict.requiresConvergence,
+// a field that does not exist on RegistryRun, so it never found a conflict and admitted everything.
+function verifyMonotonicAgainstCorpus(candidate, corpus) {
+  const conflicts = [];
+  let checked = 0;
+  for (const edit of corpus) {
+    let applies = true;
+    try { applies = candidate.appliesTo ? candidate.appliesTo(edit.file) : true; } catch { applies = false; }
+    if (!applies) continue;
+    checked += 1;
+    let res;
+    try { res = candidate.gate({ file: edit.file, before: edit.before, after: edit.after, repoRoot: repoRoot() }); } catch { continue; }
+    if (res && res.status === 'red') conflicts.push({ file: edit.file, operationId: edit.operationId, fact: res.fact });
+  }
+  return { ok: conflicts.length === 0, conflicts, checked };
+}
+
 // Coverage-gap detector (non-exiting) — shared by `gaps` and `incident`.
 function detectGapProposal() {
+  // THE REAL gap signal first: "all-gates-passed vs prod-broke". A recorded prod
+  // incident (.atomic/incidents/incidents.jsonl) whose file intersects a GREEN trace
+  // is a green-but-broken edit — the precise blind spot a NEW gate must learn to red.
+  // This is strictly stronger than the ungated-ops fallback below (a missing verdict
+  // is not a defect; a green verdict that an incident refuted IS).
+  const greenButBroken = detectIncidentGap();
+  if (greenButBroken && greenButBroken.length) {
+    const top = greenButBroken[0];
+    const ext = path.extname(top.file) || '(none)';
+    const id = `incident-${ext.replace(/\W/g, '') || 'none'}`;
+    const gate = {
+      id,
+      kind: 'GateModule',
+      targetExt: ext,
+      // modulePath is intentionally UNSET: the lattice does not auto-synthesize an
+      // executable gate body from an incident — that is the human/agent's authoring
+      // step. The proposal NAMES the witness edits a real gate must red; admission
+      // then runs that authored gate against the corpus (monotonic) before it lands.
+      modulePath: null,
+      intent: `red the green-but-broken edit class witnessed by incident on "${top.file}" (all built-in gates passed, prod broke)`,
+      witnesses: greenButBroken.slice(0, 20).map((e) => ({ file: e.file, operationId: e.operationId })),
+    };
+    const proposal = {
+      format: 'atomic-gate-proposal/v2',
+      signal: 'all-gates-passed-vs-prod-broke',
+      reason: `${greenButBroken.length} edit(s) were admitted GREEN by every built-in gate yet a prod incident later proved them defective — author a GateModule that reds this class`,
+      proposedGate: gate,
+    };
+    const dir = path.join(repoRoot(), '.atomic', 'proposed-gates'); fs.mkdirSync(dir, { recursive: true });
+    const out = path.join(dir, `${id}.proposal.json`); fs.writeFileSync(out, JSON.stringify(proposal, null, 2) + '\n');
+    return { proposalPath: out, gate, count: greenButBroken.length, signal: 'all-gates-passed-vs-prod-broke', witnesses: gate.witnesses };
+  }
+
   const ungated = allTraces().filter((t) => !t.gateVerdict);
   if (!ungated.length) return null;
   const byExt = {};
@@ -498,31 +809,48 @@ function detectGapProposal() {
   return { proposalPath: out, gate, count: topN };
 }
 
-// MONOTONIC admission — a gate is admitted only if it would NOT red any op the crivo already passed green.
-function admitGate(gate, sourceName) {
-  const greenOps = allTraces().filter((t) => t.gateVerdict && !t.gateVerdict.didBlock);
-  // a coverage gate targets ungated ops only; it can never flip a previously-green op -> monotonic by construction.
-  const conflicts = greenOps.filter((t) => gate.targetExt && path.extname(t.file) === gate.targetExt && t.gateVerdict && t.gateVerdict.requiresConvergence === false);
-  if (conflicts.length) return { ok: false, reason: `would red ${conflicts.length} previously-green op(s) — non-monotonic` };
+// MONOTONIC admission — a gate is admitted only if, RUN over the known-good corpus,
+// it reds NONE of those edits. The gate must be a REAL executable GateModule (a
+// modulePath that exports `gate(ctx)`); a declarative proposal with no module cannot
+// be admitted, because there is nothing to run against the corpus. The candidate is
+// loaded and EXECUTED over every reconstructable green edit; a concrete red on any of
+// them is a monotonicity violation and refuses admission. This replaces the prior
+// no-op (which read t.gateVerdict.requiresConvergence — absent on RegistryRun — so it
+// never found a conflict and admitted every proposal unconditionally).
+async function admitGate(gate, sourceName) {
+  if (!gate.modulePath) {
+    return { ok: false, reason: 'proposal has no modulePath — admission requires a REAL executable GateModule (a module exporting gate(ctx){return {id,status,fact}}), not a declarative descriptor' };
+  }
+  const candidate = await loadCandidateGate(gate.modulePath);
+  if (!candidate) {
+    return { ok: false, reason: `gate module ${gate.modulePath} does not exist or exports no callable gate()` };
+  }
+  const corpus = readKnownGoodCorpus();
+  const verdict = verifyMonotonicAgainstCorpus(candidate, corpus);
+  if (!verdict.ok) {
+    return { ok: false, reason: `non-monotonic: would red ${verdict.conflicts.length} known-good edit(s) — ${verdict.conflicts.slice(0, 3).map((c) => `${c.file} (${c.fact})`).join('; ')}` };
+  }
   const reg = loadGateRegistry();
-  if (reg.gates.some((x) => x.id === gate.id)) return { ok: true, already: true, reg };
-  reg.gates.push({ id: gate.id, kind: gate.kind || 'GateModule', intent: gate.intent, targetExt: gate.targetExt || null, monotonic: true, source: sourceName || null });
+  if (reg.gates.some((x) => x.id === gate.id)) return { ok: true, already: true, reg, checked: verdict.checked };
+  reg.gates.push({ id: gate.id, kind: gate.kind || 'GateModule', intent: gate.intent, modulePath: gate.modulePath, targetExt: gate.targetExt || null, monotonic: true, admittedAgainst: verdict.checked, admittedAt: new Date().toISOString(), source: sourceName || null });
   saveGateRegistry(reg);
-  return { ok: true, reg };
+  return { ok: true, reg, checked: verdict.checked };
 }
 
 // #2 close — admit a proposed gate into the registry (monotonic), so the crivo self-expands.
-function cmdAdmitGate(proposalFile) {
+async function cmdAdmitGate(proposalFile) {
   if (!proposalFile) die('usage: atomic admit-gate <proposal.json>');
   let prop;
   try { prop = JSON.parse(fs.readFileSync(proposalFile, 'utf8')); } catch (e) { die('unreadable proposal: ' + e.message); }
   const g = prop.proposedGate || prop;
   if (!g.id || !g.intent) die('proposal missing proposedGate.id / intent');
-  const r = admitGate(g, path.basename(proposalFile));
+  if (!g.modulePath) die('proposal missing proposedGate.modulePath — admission requires a REAL executable GateModule, not a declarative descriptor');
+  const r = await admitGate(g, path.basename(proposalFile));
   if (!r.ok) die('admission REFUSED — ' + r.reason);
   console.log(r.already ? `gate "${g.id}" already admitted.` : `gate ADMITTED → ${g.id}`);
   console.log(`  intent: ${g.intent}`);
-  console.log(`  registry: ${gateRegistryPath()} (${r.reg.gates.length} gate(s)) — monotonic: no previously-green op reddened`);
+  console.log(`  verified monotonic against ${r.checked ?? 0} known-good corpus edit(s) — reddened none`);
+  console.log(`  registry: ${gateRegistryPath()} (${r.reg.gates.length} gate(s)) — the byte floor consults it on every write`);
   process.exit(0);
 }
 
@@ -539,7 +867,7 @@ function cmdEnforce(file) {
 }
 
 // #3 close — the entrypoint a prod monitor calls on an incident; closes blame -> gap -> admission with zero humans.
-function cmdIncident(spec) {
+async function cmdIncident(spec) {
   let file = spec, line;
   const m = spec ? /^(.+):(\d+)$/.exec(spec) : null;
   if (m) { file = m[1]; line = Number(m[2]); }
@@ -548,11 +876,22 @@ function cmdIncident(spec) {
   const ops = allTraces().filter((t) => t.file === file || file.endsWith(t.file) || t.file.endsWith(file)).sort((a, b) => (a.ts < b.ts ? 1 : -1));
   const op = ops[0];
   console.log(`  atomic op: ${op ? `${op.operationId} (gate ${op.gateVerdict ? (op.gateVerdict.didBlock ? 'BLOCKED' : 'green') : 'NONE'})` : 'none — edited off-firewall (bypass)'}`);
+  // STRONG form (#3 complete): before the coverage-gap admission below, run the full
+  // forensic chain — link the op's session + commit, recover the before/after bytes,
+  // RE-EXECUTE the crivo over the recovered edit, NAME the false-negative gate, and
+  // write the recalibration record (which itself feeds a proposal into #2). This is
+  // what makes the incident loop name the EXACT gate that admitted the defect.
+  await runCausalBlame(file, Number.isFinite(line) ? `L${line}` : undefined);
   const gap = detectGapProposal();
   if (!gap) { console.log('  no coverage gap — the crivo already judged every op. Loop closed (nothing to add).'); process.exit(0); }
-  console.log(`  gap: ${gap.count} ungated op(s) -> proposal ${path.basename(gap.proposalPath)}`);
-  const r = admitGate(gap.gate, path.basename(gap.proposalPath));
-  if (!r.ok) { console.log(`  admission refused (non-monotonic): ${r.reason}`); process.exit(1); }
+  console.log(`  gap: ${gap.count} green-but-broken / ungated op(s) -> proposal ${path.basename(gap.proposalPath)}`);
+  if (!gap.gate.modulePath) {
+    console.log(`  proposal is declarative (no executable GateModule) — author a real gate(ctx){return {id,status,fact}} module under atomic-os/gates/, set proposedGate.modulePath, then: atomic admit-gate ${path.basename(gap.proposalPath)}`);
+    process.exit(0);
+  }
+  const r = await admitGate(gap.gate, path.basename(gap.proposalPath));
+  if (!r.ok) { console.log(`  admission refused: ${r.reason}`); process.exit(1); }
+  console.log(`  verified monotonic against ${r.checked ?? 0} known-good corpus edit(s) — reddened none`);
   console.log(`  gate ${r.already ? 'already present' : 'ADMITTED'}: ${gap.gate.id} — registry now has ${r.reg.gates.length} gate(s)`);
   console.log('  LOOP CLOSED: incident -> blame -> gap -> proposal -> monotonic admission -> registry. Zero humans on the critical path.');
   process.exit(0);
@@ -582,16 +921,16 @@ switch (cmd) {
   case 'init': cmdInit(); break;
   case 'mcp': cmdMcp(rest[0]); break;
   case 'intent': cmdIntent(rest[0]); break;
-  case 'prove': cmdProve(rest[0]); break;
-  case 'verify-proof': cmdVerifyProof(rest[0]); break;
+  case 'prove': await cmdProve(rest[0]); break;
+  case 'verify-proof': await cmdVerifyProof(rest.find((r) => !r.startsWith('--')), rest.includes('--reexec')); break;
   case 'founder': cmdFounder(); break;
-  case 'blame': cmdBlame(rest[0], rest[1]); break;
+  case 'blame': cmdBlame(rest[0], rest[1]).catch(die); break;
   case 'gaps': cmdGaps(); break;
-  case 'admit-gate': cmdAdmitGate(rest[0]); break;
+  case 'admit-gate': cmdAdmitGate(rest[0]).catch(die); break;
   case 'enforce': cmdEnforce(rest[0]); break;
-  case 'incident': cmdIncident(rest[0]); break;
+  case 'incident': cmdIncident(rest[0]).catch(die); break;
   case 'replay': case 'undo': cmdReplayUndo(cmd, rest[0]); break;
   default:
-    console.log('atomic — proof-chain CLI + governance + MCP trust firewall\n  init [--force]            detect the repo + generate governance config\n  verify [<opId>|--head]    recompute the chain + check file state\n  explain <opId>            intention, proof, char diff, gate verdict\n  log [-n N]                walk the proof chain\n  compare                   run AtomicBench\n  mcp <scan|approve|verify> [--cmd "<server>"]   capability manifest + tool-poisoning detection\n  intent check [--base <ref>] [--run]            verify a change stayed within the declared product intent\n  replay|undo <opId>        (proof != content snapshot; see note)');
+    console.log('atomic — proof-chain CLI + governance + MCP trust firewall\n  init [--force]            detect the repo + generate governance config\n  verify [<opId>|--head]    recompute the chain + check file state\n  explain <opId>            intention, proof, char diff, gate verdict\n  log [-n N]                walk the proof chain\n  compare                   run AtomicBench\n  mcp <scan|approve|verify> [--cmd "<server>"]   capability manifest + tool-poisoning detection\n  intent check [--base <ref>] [--run]            verify a change stayed within the declared product intent\n  prove <opId>              export a portable proof-carrying edit (+ re-exec body when content-snapshotted)\n  verify-proof <file> [--reexec]   re-verify a proof; --reexec RE-RUNS validate + Merkle + gateRunId + seal\n  replay|undo <opId>        (proof != content snapshot; see note)');
     process.exit(cmd ? 1 : 0);
 }

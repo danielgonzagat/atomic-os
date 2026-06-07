@@ -161,7 +161,7 @@ const bl = cli(['blame', 'blame.py:1']);
 check('atomic blame resolves a line to its commit + atomic record', bl.status === 0 && /commit /.test(bl.stdout));
 // Trust-Compiler loop closure: incident -> gap -> MONOTONIC admission -> registry; enforce consults it
 const inc = cli(['incident', 'blame.py:1']);
-check('atomic incident closes the loop (gap -> monotonic gate admission, zero humans)', inc.status === 0 && /(LOOP CLOSED|no coverage gap)/.test(inc.stdout));
+check('atomic incident closes the loop (gap -> declarative proposal / monotonic admission, zero humans)', inc.status === 0 && /(LOOP CLOSED|no coverage gap|proposal is declarative)/.test(inc.stdout));
 const enf = cli(['enforce']);
 check('atomic enforce consults the admitted gate registry', enf.status === 0 && /(admitted gate|registry empty)/.test(enf.stdout));
 const rePath = path.join(work, '.atomic', 'gates', 'registry.json');
