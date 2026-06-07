@@ -97,6 +97,12 @@ const esGo = await rpc(12, 'tools/call', { name: 'atomic_edit_symbol', arguments
 check('atomic_edit_symbol on Go (insert_after) applies', !!esGo && fs.readFileSync(path.join(work, 'b.go'), 'utf8').includes('func Fare('));
 const esRs = await rpc(13, 'tools/call', { name: 'atomic_edit_symbol', arguments: { file: 'b.rs', selector: 'greet', op: 'insert_after', code: 'pub fn fare(n) -> i32 {\n    2\n}\n' } });
 check('atomic_edit_symbol on Rust (insert_after) applies', !!esRs && fs.readFileSync(path.join(work, 'b.rs'), 'utf8').includes('pub fn fare('));
+// universal read-side navigation: code_outline enumerates symbols for non-TS grammars
+const olGo = await rpc(14, 'tools/call', { name: 'code_outline', arguments: { file: 'b.go' } });
+const olGoSyms = (() => { try { return JSON.parse(olGo.result.content[0].text).symbols.length; } catch { return 0; } })();
+check('code_outline enumerates Go symbols (universal nav)', olGoSyms >= 2);
+const rdGo = await rpc(15, 'tools/call', { name: 'code_read_symbol', arguments: { file: 'b.go', selector: 'Fare' } });
+check('code_read_symbol reads a Go definition (universal nav)', /func Fare\(/.test(txt(rdGo)));
 
 srv.kill('SIGKILL');
 

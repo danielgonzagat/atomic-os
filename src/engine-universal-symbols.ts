@@ -23,7 +23,7 @@ export interface UniversalSymbolResult {
 }
 
 /** Named-definition node types per grammar; each exposes childForFieldName('name'). */
-const DEF_TYPES: Record<string, Set<string>> = {
+export const DEF_TYPES: Record<string, Set<string>> = {
   python: new Set(['function_definition', 'class_definition']),
   javascript: new Set(['function_declaration', 'generator_function_declaration', 'class_declaration', 'method_definition']),
   typescript: new Set(['function_declaration', 'generator_function_declaration', 'class_declaration', 'abstract_class_declaration', 'method_definition', 'interface_declaration', 'type_alias_declaration', 'enum_declaration']),
