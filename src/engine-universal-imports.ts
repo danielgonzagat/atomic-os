@@ -104,3 +104,27 @@ export async function universalAddImport(
     detail: { action: realImports.length ? 'added-specifier' : 'created-declaration', moduleSpecifier, name, method: 'cst-correct' },
   };
 }
+
+/** Remove the import of `moduleSpecifier` (matching `name` when given) for any grammar-backed language. */
+export async function universalRemoveImport(
+  file: string,
+  original: string,
+  moduleSpecifier: string,
+  name: string,
+  ext: string,
+): Promise<SemanticEditResult> {
+  const grammar = extToGrammar(ext);
+  if (!grammar || ['json', 'javascript', 'typescript', 'tsx'].includes(grammar)) {
+    throw new Error(`remove_import: no universal import for ${ext || '(none)'} (TS/JS go through ts-morph; JSON has no imports)`);
+  }
+  const lines = original.split('\n');
+  const isImportLine = (t: string): boolean =>
+    /^(import|from|use|require(_relative)?|#include|source)\b/.test(t) && t.includes(moduleSpecifier) && (!name || t.includes(name));
+  const idx = lines.findIndex((l) => isImportLine(l.trim()));
+  if (idx < 0) {
+    return { newText: original, validation: validate(file, original, original), detail: { action: 'not-present', moduleSpecifier, name, method: 'cst-correct' } };
+  }
+  lines.splice(idx, 1);
+  const newText = lines.join('\n');
+  return { newText, validation: validate(file, original, newText), detail: { action: 'removed', moduleSpecifier, name, method: 'cst-correct' } };
+}
