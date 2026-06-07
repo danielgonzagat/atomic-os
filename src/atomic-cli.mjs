@@ -338,6 +338,58 @@ function cmdIntent(sub) {
   process.exit(ok ? 0 : 2);
 }
 
+// ── Proof-Carrying Edits — export a portable, independently-verifiable artifact ──
+function cmdProve(opId) {
+  if (!opId) die('usage: atomic prove <opId>');
+  const t = loadTrace(opId);
+  if (!t) die(`no trace for ${opId}`);
+  const artifact = {
+    format: 'atomic-proof-carrying-edit/v1',
+    operationId: t.operationId,
+    ts: t.ts,
+    file: t.file,
+    operator: t.operator,
+    intention: t.intention ?? null,
+    parentSha256: t.parentSha256 ?? '',
+    afterSha256: t.afterSha256,
+    proposedSha256: t.proposedSha256 ?? null,
+    byteEffect: t.byteEffect ?? null,
+    validation: t.validation ?? null,
+    negativeActionProof: t.negativeActionProof ?? null,
+    gateVerdict: t.gateVerdict ?? null,
+    audit: t.audit ?? null,
+    chainHash: t.chainHash,
+    verifier: 'atomic verify-proof <file> — recomputes sha256(parentSha256 ‖ afterSha256 ‖ canonicalJSON(gateVerdict)) and asserts it equals chainHash. No repo, no trust in the producer.',
+  };
+  const dir = path.join(repoRoot(), '.atomic', 'proofs');
+  fs.mkdirSync(dir, { recursive: true });
+  const out = path.join(dir, `${t.operationId}.proof.json`);
+  fs.writeFileSync(out, JSON.stringify(artifact, null, 2) + '\n');
+  console.log(`proof-carrying edit → ${out}`);
+  console.log(`  chainHash ${t.chainHash}`);
+  console.log(`  re-verify anywhere (no repo needed): atomic verify-proof ${out}`);
+  process.exit(0);
+}
+
+function cmdVerifyProof(file) {
+  if (!file) die('usage: atomic verify-proof <proof.json>');
+  if (!fs.existsSync(file)) die(`no such proof file: ${file}`);
+  let a;
+  try { a = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { die(`unreadable proof: ${e.message}`); }
+  if (!a.chainHash || !a.afterSha256) die('not an atomic proof-carrying edit (missing chainHash / afterSha256)');
+  const recomputed = chainHashOf(a.parentSha256 ?? '', a.afterSha256, a.gateVerdict ?? undefined);
+  const ok = recomputed === a.chainHash;
+  const gv = a.gateVerdict;
+  console.log(`proof-carrying edit — ${a.operationId} (${a.operator} · ${a.file})`);
+  console.log(`  intention   ${a.intention ?? '(none)'}`);
+  console.log(`  chain       ${ok ? 'OK — recomputed hash matches the artifact (tamper-evident)' : 'TAMPERED — recomputed != recorded chainHash'}`);
+  console.log(`  gates       ${gv ? (gv.didBlock ? 'BLOCKED' : 'admitted (green)') : '(no gate verdict captured)'}`);
+  console.log(`  syntax      before=${a.validation?.syntaxErrorsBefore ?? '?'} after=${a.validation?.syntaxErrorsAfter ?? '?'}`);
+  console.log(`  afterSha256 ${a.afterSha256}`);
+  console.log(`  verdict     ${ok ? 'VERIFIED — independently, without the repo or trusting the producer' : 'FAILED'}`);
+  process.exit(ok ? 0 : 2);
+}
+
 function cmdReplayUndo(verb, opId) {
   if (!opId) die(`usage: atomic ${verb} <opId>`);
   const t = loadTrace(opId);
@@ -362,6 +414,8 @@ switch (cmd) {
   case 'init': cmdInit(); break;
   case 'mcp': cmdMcp(rest[0]); break;
   case 'intent': cmdIntent(rest[0]); break;
+  case 'prove': cmdProve(rest[0]); break;
+  case 'verify-proof': cmdVerifyProof(rest[0]); break;
   case 'replay': case 'undo': cmdReplayUndo(cmd, rest[0]); break;
   default:
     console.log('atomic — proof-chain CLI + governance + MCP trust firewall\n  init [--force]            detect the repo + generate governance config\n  verify [<opId>|--head]    recompute the chain + check file state\n  explain <opId>            intention, proof, char diff, gate verdict\n  log [-n N]                walk the proof chain\n  compare                   run AtomicBench\n  mcp <scan|approve|verify> [--cmd "<server>"]   capability manifest + tool-poisoning detection\n  intent check [--base <ref>] [--run]            verify a change stayed within the declared product intent\n  replay|undo <opId>        (proof != content snapshot; see note)');

@@ -131,6 +131,19 @@ const v = cli(['verify', '--head']);
 check('atomic verify --head recomputes the chain (VERIFIED)', v.status === 0 && /VERIFIED/.test(v.stdout));
 const lg = cli(['log']);
 check('atomic log walks the proof chain', /proof chain @/.test(lg.stdout) && /atomic_/.test(lg.stdout));
+// Proof-Carrying Edits: export a portable artifact + independently re-verify it; tamper -> FAIL
+const traceDir = path.join(work, '.atomic', 'traces');
+const anyOp = fs.existsSync(traceDir) ? (fs.readdirSync(traceDir).find((f) => f.endsWith('.json')) || '').replace(/\.json$/, '') : '';
+const pv = cli(['prove', anyOp]);
+const proofFile = path.join(work, '.atomic', 'proofs', `${anyOp}.proof.json`);
+check('atomic prove emits a portable proof-carrying artifact', pv.status === 0 && fs.existsSync(proofFile));
+const vp = cli(['verify-proof', proofFile]);
+check('atomic verify-proof VERIFIES the artifact independently', vp.status === 0 && /VERIFIED/.test(vp.stdout));
+const pj = JSON.parse(fs.readFileSync(proofFile, 'utf8'));
+pj.afterSha256 = '0'.repeat(64);
+fs.writeFileSync(proofFile, JSON.stringify(pj));
+const vpT = cli(['verify-proof', proofFile]);
+check('atomic verify-proof detects a tampered artifact (FAILED)', vpT.status === 2 && /TAMPERED|FAILED/.test(vpT.stdout));
 
 // governance installer: `atomic init` detects a repo + generates config
 const initDir = fs.mkdtempSync(path.join(os.tmpdir(), 'atomic-init-'));
