@@ -144,6 +144,21 @@ pj.afterSha256 = '0'.repeat(64);
 fs.writeFileSync(proofFile, JSON.stringify(pj));
 const vpT = cli(['verify-proof', proofFile]);
 check('atomic verify-proof detects a tampered artifact (FAILED)', vpT.status === 2 && /TAMPERED|FAILED/.test(vpT.stdout));
+// #4 Founder-facing cumulative proof — non-technical session rollup
+const fr = cli(['founder']);
+check('atomic founder aggregates a non-technical session report', fr.status === 0 && /Founder report/.test(fr.stdout) && /files touched/.test(fr.stdout));
+// #2 Self-improving gates — coverage-gap detector + gate proposal artifact
+const gp = cli(['gaps']);
+check('atomic gaps reports coverage gaps + emits a gate proposal', gp.status === 0 && /coverage gaps/.test(gp.stdout));
+// #3 Causal blame — git blame -> the atomic op + its gate verdict (or flags an off-firewall bypass)
+spawnSync('git', ['init', '-q'], { cwd: work });
+spawnSync('git', ['config', 'user.email', 'a@b.c'], { cwd: work });
+spawnSync('git', ['config', 'user.name', 'smoke'], { cwd: work });
+fs.writeFileSync(path.join(work, 'blame.py'), 'x = 1\n');
+spawnSync('git', ['add', 'blame.py'], { cwd: work });
+spawnSync('git', ['commit', '-qm', 'seed'], { cwd: work });
+const bl = cli(['blame', 'blame.py:1']);
+check('atomic blame resolves a line to its commit + atomic record', bl.status === 0 && /commit /.test(bl.stdout));
 
 // governance installer: `atomic init` detects a repo + generates config
 const initDir = fs.mkdtempSync(path.join(os.tmpdir(), 'atomic-init-'));

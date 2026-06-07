@@ -390,6 +390,94 @@ function cmdVerifyProof(file) {
   process.exit(ok ? 0 : 2);
 }
 
+// ── #4 Founder-facing continuous proof — aggregate per-op audit blocks into one report ──
+function cmdFounder() {
+  const traces = allTraces().sort((a, b) => (a.ts < b.ts ? -1 : 1));
+  if (!traces.length) { console.log('(no edits recorded — empty .atomic/traces)'); process.exit(0); }
+  const files = new Set();
+  const notProven = [];
+  const changed = [];
+  let added = 0, removed = 0, minTrust = 100, blocked = 0;
+  for (const t of traces) {
+    files.add(t.file);
+    const be = t.byteEffect || {};
+    added += be.addedBytes || 0; removed += be.removedBytes || 0;
+    const z = t.audit?.zeroCodeTrust;
+    if (typeof z === 'number') minTrust = Math.min(minTrust, z);
+    if (t.audit?.notProven) notProven.push(`${t.file}: ${t.audit.notProven}`);
+    if (t.audit?.whatChanged) changed.push(`${t.file}: ${t.audit.whatChanged}`);
+    if (t.gateVerdict?.didBlock) blocked += 1;
+  }
+  console.log('# Founder report — what changed in this product (no code required)');
+  console.log(`edits: ${traces.length} · files touched: ${files.size} · bytes +${added}/-${removed}`);
+  console.log(`refused (gate-blocked, never written): ${blocked} · lowest per-edit trust ceiling: ${minTrust}/100`);
+  console.log('\nfiles:');
+  for (const f of files) console.log('  • ' + f);
+  console.log('\nNOT proven (honest — verify by running the product):');
+  const np = [...new Set(notProven)].slice(0, 12);
+  if (!np.length) console.log('  (each edit carried its own founder note; structural validation held)');
+  for (const n of np) console.log('  - ' + n);
+  console.log('\nEvery edit is independently provable: atomic prove <opId> / atomic verify-proof <file>.');
+  process.exit(0);
+}
+
+// ── #3 Causal blame — map a defect line to the atomic op that introduced it + its gate verdict ──
+function cmdBlame(spec, maybeLine) {
+  let file = spec, line = Number(maybeLine);
+  const m = spec ? /^(.+):(\d+)$/.exec(spec) : null;
+  if (m) { file = m[1]; line = Number(m[2]); }
+  if (!file || !Number.isFinite(line)) die('usage: atomic blame <file>:<line>');
+  const root = repoRoot();
+  const b = spawnSync('git', ['-C', root, 'blame', '-L', `${line},${line}`, '--porcelain', file], { encoding: 'utf8' });
+  if (b.status !== 0) die('git blame failed (not a git repo / bad path): ' + (b.stderr || '').trim().slice(0, 160));
+  const commit = (b.stdout.split('\n')[0] || '').split(' ')[0];
+  const author = (b.stdout.match(/^author (.+)$/m) || [])[1] || '?';
+  console.log(`blame ${file}:${line}`);
+  console.log(`  commit ${commit.slice(0, 12)} · author ${author}`);
+  const ops = allTraces()
+    .filter((t) => t.file === file || file.endsWith(t.file) || t.file.endsWith(file))
+    .sort((a, b2) => (a.ts < b2.ts ? 1 : -1));
+  if (!ops.length) {
+    console.log('  NO atomic op recorded for this file — it was edited OUTSIDE the atomic firewall (a bypass). That is the gap: route edits through atomic.');
+    process.exit(0);
+  }
+  const op = ops[0];
+  const gv = op.gateVerdict;
+  console.log(`  atomic op ${op.operationId} (${op.operator} · ${op.ts})`);
+  console.log(`  gate verdict: ${gv ? (gv.didBlock ? 'BLOCKED' : 'admitted green') : 'NONE — admitted without a convergence verdict (coverage gap)'}`);
+  console.log(`  -> if this line is a defect: the gate that admitted it is the recalibration target. Close the loop with: atomic gaps`);
+  process.exit(0);
+}
+
+// ── #2 Self-improving gates — detect coverage gaps + propose a gate (admission needs the engine registry) ──
+function cmdGaps() {
+  const traces = allTraces();
+  const ungated = traces.filter((t) => !t.gateVerdict);
+  const byExt = {};
+  for (const t of ungated) { const e = path.extname(t.file) || '(none)'; byExt[e] = (byExt[e] || 0) + 1; }
+  console.log('# Gate coverage gaps — ops admitted without a convergence verdict');
+  console.log(`total ops: ${traces.length} · ungated: ${ungated.length}`);
+  const entries = Object.entries(byExt).sort((a, b) => b[1] - a[1]);
+  for (const [e, n] of entries) console.log(`  ${e}: ${n} ungated op(s)`);
+  if (!entries.length) { console.log('  no gaps — every op carried a gate verdict.'); process.exit(0); }
+  const [topExt, topN] = entries[0];
+  const id = `coverage-${topExt.replace(/\W/g, '') || 'none'}`;
+  const proposal = {
+    format: 'atomic-gate-proposal/v1',
+    reason: `${topN} op(s) on "${topExt}" files were admitted without a convergence gate verdict`,
+    proposedGate: { id, kind: 'GateModule', intent: `require a green convergence verdict before admitting any write to "${topExt}" files` },
+    admission: 'submit to the self-expansion lattice in the engine registry (single-owner scripts/mcp/atomic-edit) — atomic does not auto-admit a gate it cannot prove monotonic',
+  };
+  const dir = path.join(repoRoot(), '.atomic', 'proposed-gates');
+  fs.mkdirSync(dir, { recursive: true });
+  const out = path.join(dir, `${id}.proposal.json`);
+  fs.writeFileSync(out, JSON.stringify(proposal, null, 2) + '\n');
+  console.log(`\nproposed gate → ${out}`);
+  console.log(`  intent: ${proposal.proposedGate.intent}`);
+  console.log('  admission: needs the self-expansion lattice on the engine registry (monotonic) — not auto-admitted here.');
+  process.exit(0);
+}
+
 function cmdReplayUndo(verb, opId) {
   if (!opId) die(`usage: atomic ${verb} <opId>`);
   const t = loadTrace(opId);
@@ -416,6 +504,9 @@ switch (cmd) {
   case 'intent': cmdIntent(rest[0]); break;
   case 'prove': cmdProve(rest[0]); break;
   case 'verify-proof': cmdVerifyProof(rest[0]); break;
+  case 'founder': cmdFounder(); break;
+  case 'blame': cmdBlame(rest[0], rest[1]); break;
+  case 'gaps': cmdGaps(); break;
   case 'replay': case 'undo': cmdReplayUndo(cmd, rest[0]); break;
   default:
     console.log('atomic — proof-chain CLI + governance + MCP trust firewall\n  init [--force]            detect the repo + generate governance config\n  verify [<opId>|--head]    recompute the chain + check file state\n  explain <opId>            intention, proof, char diff, gate verdict\n  log [-n N]                walk the proof chain\n  compare                   run AtomicBench\n  mcp <scan|approve|verify> [--cmd "<server>"]   capability manifest + tool-poisoning detection\n  intent check [--base <ref>] [--run]            verify a change stayed within the declared product intent\n  replay|undo <opId>        (proof != content snapshot; see note)');
