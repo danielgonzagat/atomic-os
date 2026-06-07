@@ -103,6 +103,12 @@ const olGoSyms = (() => { try { return JSON.parse(olGo.result.content[0].text).s
 check('code_outline enumerates Go symbols (universal nav)', olGoSyms >= 2);
 const rdGo = await rpc(15, 'tools/call', { name: 'code_read_symbol', arguments: { file: 'b.go', selector: 'Fare' } });
 check('code_read_symbol reads a Go definition (universal nav)', /func Fare\(/.test(txt(rdGo)));
+// universal import insertion: add_import works on non-TS grammars
+fs.writeFileSync(path.join(work, 'b.rb'), 'def hi\nend\n');
+const impRb = await rpc(16, 'tools/call', { name: 'atomic_add_import', arguments: { file: 'b.rb', module: 'json', name: '' } });
+check('atomic_add_import on Ruby (require) applies', !!impRb && fs.readFileSync(path.join(work, 'b.rb'), 'utf8').includes("require 'json'"));
+const impGo = await rpc(17, 'tools/call', { name: 'atomic_add_import', arguments: { file: 'b.go', module: 'strings', name: '' } });
+check('atomic_add_import on Go (import) applies', !!impGo && fs.readFileSync(path.join(work, 'b.go'), 'utf8').includes('import "strings"'));
 
 srv.kill('SIGKILL');
 

@@ -1,6 +1,7 @@
 import * as ts from 'typescript';
 import { validate, type ValidationResult } from './engine.js';
 import { resolveSymbol } from './symbols.js';
+import { universalAddImport } from './engine-universal-imports.js';
 
 // ── v3: import + object-property semantic ops (adopted from Codex's
 //        semantic-edit, but routed through validate()+atomic write so they
@@ -129,7 +130,11 @@ export async function addNamedImport(
   alias?: string,
   typeOnly = false,
 ): Promise<SemanticEditResult> {
-  assertTs(file, 'add_import');
+  const importExt = (() => {
+    const i = file.lastIndexOf('.');
+    return i < 0 ? '' : file.slice(i).toLowerCase();
+  })();
+  if (!TS_EXT.has(importExt)) return universalAddImport(file, original, moduleSpecifier, name, alias, importExt);
   const sf = await tsmProject(file, original);
   const decls = sf
     .getImportDeclarations()
