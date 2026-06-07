@@ -116,6 +116,13 @@ function applySplices(content: string, splices: SpliceProposal[]): string {
   return out;
 }
 
+export interface ConvergedOverlayFile {
+  /** repo-relative file in the final overlay after every accepted splice */
+  file: string;
+  /** full final bytes for this file; callers still need write-gate admission before commit */
+  newText: string;
+}
+
 /** Candidate file paths a relative specifier could resolve to (mirrors the shared resolver). */
 function relCandidates(base: string): string[] {
   const c = [
@@ -406,6 +413,8 @@ function proposeConnectionFixes(repoRoot: string, overlay: Map<string, string>, 
 export interface ConvergeReport extends ConvergeResult {
   /** the rationale of every accepted splice, in application order (corpus / audit trail) */
   accepted: string[];
+  /** final overlay bytes after convergence; this is what lets higher-level intent tools become generators */
+  files: ConvergedOverlayFile[];
   /** the reds that survived to the fixpoint (present iff !converged) — never guessed away */
   residual: UnifiedRed[];
 }
@@ -474,6 +483,7 @@ export async function converge(repoRoot: string, overlay: Map<string, string>): 
     // intention decision, NOT a guessed splice. converged ⟺ finalReds === 0.
     needsIntent: !converged,
     accepted,
+    files: [...work].map(([file, newText]) => ({ file, newText })),
     residual: converged ? [] : reds,
   };
 }
