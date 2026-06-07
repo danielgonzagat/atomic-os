@@ -88,11 +88,15 @@ const cm = await rpc(10, 'tools/call', { name: 'atomic_session_commit', argument
 check('atomic_session_commit kept the edit (salute->hail)', fs.readFileSync(path.join(work, 'm.py'), 'utf8').includes('def hail(n)'));
 check('atomic_session_commit emitted a receipt', /session|commit/i.test(txt(cm)));
 
-// safety: ts-morph-only tools must REFUSE a non-TS file cleanly (no silent corruption)
-const beforePy = fs.readFileSync(path.join(work, 'm.py'), 'utf8');
-const es = await rpc(11, 'tools/call', { name: 'atomic_edit_symbol', arguments: { file: 'm.py', selector: 'hail', op: 'replace', code: 'def hail(n):\n    return n\n' } });
-check('atomic_edit_symbol refuses a non-TS (.py) file cleanly', /TS\/JS|requires a TS/i.test(txt(es)));
-check('refused edit_symbol left the .py file untouched', fs.readFileSync(path.join(work, 'm.py'), 'utf8') === beforePy);
+// universal symbol editing now spans ALL grammars (not just TS/JS) — G1 universalized
+fs.writeFileSync(path.join(work, 'b.go'), 'package b\n\nfunc Greet(n string) string {\n\treturn n\n}\n');
+fs.writeFileSync(path.join(work, 'b.rs'), 'pub fn greet(n) -> i32 {\n    1\n}\n');
+const esPy = await rpc(11, 'tools/call', { name: 'atomic_edit_symbol', arguments: { file: 'm.py', selector: 'hail', op: 'insert_after', code: 'def fare(n):\n    return n\n' } });
+check('atomic_edit_symbol on Python (insert_after) applies', !!esPy && fs.readFileSync(path.join(work, 'm.py'), 'utf8').includes('def fare(n)'));
+const esGo = await rpc(12, 'tools/call', { name: 'atomic_edit_symbol', arguments: { file: 'b.go', selector: 'Greet', op: 'insert_after', code: 'func Fare(n string) string {\n\treturn n\n}\n' } });
+check('atomic_edit_symbol on Go (insert_after) applies', !!esGo && fs.readFileSync(path.join(work, 'b.go'), 'utf8').includes('func Fare('));
+const esRs = await rpc(13, 'tools/call', { name: 'atomic_edit_symbol', arguments: { file: 'b.rs', selector: 'greet', op: 'insert_after', code: 'pub fn fare(n) -> i32 {\n    2\n}\n' } });
+check('atomic_edit_symbol on Rust (insert_after) applies', !!esRs && fs.readFileSync(path.join(work, 'b.rs'), 'utf8').includes('pub fn fare('));
 
 srv.kill('SIGKILL');
 

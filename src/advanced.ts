@@ -15,6 +15,7 @@ import * as path from 'node:path';
 import * as ts from 'typescript';
 import { validate, type ValidationResult, TS_EXT, extOf } from './engine.js';
 import { resolveSymbol } from './symbols.js';
+import { universalEditSymbol } from './engine-universal-symbols.js';
 export { previewDiff, characterDiff } from './advanced-diff.js';
 
 export type SymbolOp = 'replace' | 'insert_after' | 'remove';
@@ -61,10 +62,7 @@ export async function editSymbol(
   code?: string,
 ): Promise<SymbolEditResult> {
   if (!TS_EXT.has(extOf(file))) {
-    throw new Error(
-      `edit_symbol requires a TS/JS file, got ${extOf(file) || '(none)'}; ` +
-        `the universal multi-language edit_symbol is pending — use atomic_replace_at, atomic_ast_edit, or atomic_replace_between_anchors for other languages.`,
-    );
+    return universalEditSymbol(file, original, selector, op, code, extOf(file));
   }
   const { Project, Node } = await import('ts-morph');
   const project = new Project({
