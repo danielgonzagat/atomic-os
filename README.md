@@ -10,6 +10,7 @@ requires a written proof.**
 [![languages](https://img.shields.io/badge/structural%20edit-multi--language%20WASM-blue)](#the-universal-engine-multi-language-pure-wasm)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![smoke](https://img.shields.io/badge/smoke-20%2F20-success)](#verify-it-yourself)
+[![benchmark](https://img.shields.io/badge/AtomicBench-98%25%20bytes%20avoided%20vs%20line-E85D30)](docs/BENCHMARK.md)
 
 > This is the **complete** Atomic OS — the full engine we run in production,
 > generalized for any repo: 83 tools, the universal multi-language engine, the
@@ -289,6 +290,28 @@ Every check runs the **live MCP server** in an isolated temp workspace — no ho
 monorepo, no mocks. The edit checks exercise the byte-positivity law (a negative
 edit is allowed only with proof); the session checks prove the transactional
 window really snapshots, rolls back, and commits.
+
+---
+
+## AtomicBench — measured, not claimed
+
+```bash
+npm run bench        # build + run the live suite; add --md to (re)write docs/BENCHMARK.md
+```
+
+Runs the live server against a 6-language correction suite and **measures** the
+bytes Atomic OS actually changed vs the bytes a line-rewrite (what a line editor
+touches) and a file-rewrite (what a "rewrite-and-trust" agent re-emits) would
+have changed for the *same* edit — baselines computed, not asserted:
+
+| | Atomic | Line-rewrite | File-rewrite |
+|---|--:|--:|--:|
+| bytes changed (6 single-token corrections: py/js/ts/go/rust/java) | **6** | 332 | 645 |
+| **expansion avoided** | — | **98.2%** | **99.1%** |
+
+Plus a safety suite that must be all-refused: negative-byte edit without proof →
+refused; path escape → refused; syntax-breaking edit → refused; every applied
+edit left a replayable trace. Full table + method: [`docs/BENCHMARK.md`](docs/BENCHMARK.md).
 
 ---
 

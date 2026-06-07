@@ -1,6 +1,6 @@
 {
   "name": "atomic-os",
-  "version": "3.0.1",
+  "version": "3.1.0",
   "private": false,
   "description": "Atomic OS — the complete 83-tool structured-read + atomic-edit MCP that turns any AI CLI agent into a surgical, verifiable, universal (multi-language) code engineer. Every mutation flows through a firewall: sha256 + syntax-validate + char-level trace + protected-file guard + rollback. Byte-positivity law (destroying correct bytes requires a written proofOfIncorrectness). Content/anchor-addressed editing (no line/column math), multi-file atomic transactions, named transactional sessions (rollback/commit as one unit), guarded command execution, a convergence/proof gate lattice, LSP WorkspaceEdit apply, native ripgrep/glob/tree-sitter, and a bypass-rate meter.",
   "license": "MIT",
@@ -20,6 +20,7 @@
     "docs/OPERATING_GUIDE.md",
     "docs/AGENTS.md",
     "docs/AGENT_RUNBOOK.md",
+    "docs/BENCHMARK.md",
     "integrations",
     "atomic-edit.protected.example.json",
     "tsconfig.json",
@@ -34,6 +35,7 @@
     "start": "bash src/atomic-edit-mcp-launcher.sh",
     "smoke": "node src/smoke.mjs",
     "test": "node src/smoke.mjs",
+    "bench": "node src/bench.mjs",
     "prepublishOnly": "node src/build.mjs"
   },
   "engines": {
