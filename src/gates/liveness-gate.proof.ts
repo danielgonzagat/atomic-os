@@ -172,7 +172,7 @@ export const y = {
   const spanText = `
 const tracer = makeTracer();
 export function work() {
-  const span = tracer.startSpan('atomic.live.phantom_span');
+  const span = tracer.startSpan('kloel.live.phantom_span');
   return span;
 }
 `;
@@ -197,7 +197,7 @@ export function work() {
   /* ───────────────── SPAN half — non-empty set containing the span = GREEN ─────────────── */
   __setLivenessProbeConfig({
     baseUrl: null,
-    observedSpanNames: new Set<string>(['atomic.live.phantom_span']),
+    observedSpanNames: new Set<string>(['kloel.live.phantom_span']),
   });
   const spanGreen = await runOn('backend/src/__liveness_span_green__.ts', spanText);
   console.log(`\n[SPAN:observed] green=${spanGreen.green} reds=${spanGreen.reds.length} unjudged=${spanGreen.unjudged ?? false}`);
@@ -241,8 +241,8 @@ export function work() {
   check('ENV: empty env → null base (→ gate unjudged)', noBase === null);
   const withBase = resolveLiveBaseUrl({ LIVENESS_BASE_URL: 'https://x.test/' } as NodeJS.ProcessEnv);
   check('ENV: LIVENESS_BASE_URL resolved + trailing slash trimmed', withBase === 'https://x.test');
-  const pulseBase = resolveLiveBaseUrl({ PULSE_BACKEND_URL: 'https://atomic.test' } as NodeJS.ProcessEnv);
-  check('ENV: PULSE_BACKEND_URL is a recognized live target key', pulseBase === 'https://atomic.test');
+  const pulseBase = resolveLiveBaseUrl({ PULSE_BACKEND_URL: 'https://kloel.test' } as NodeJS.ProcessEnv);
+  check('ENV: PULSE_BACKEND_URL is a recognized live target key', pulseBase === 'https://kloel.test');
 
   __setLivenessProbeConfig(null); // reset to live defaults
   console.log(failures === 0 ? '\nPROOF PASS' : `\nPROOF FAIL (${failures} assertion(s) failed)`);

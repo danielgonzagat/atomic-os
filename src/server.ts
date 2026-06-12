@@ -1,5 +1,5 @@
 /**
- * atomic-os — MCP server that adds the sub-line action space the
+ * kloel-atomic-edit — MCP server that adds the sub-line action space the
  * built-in coarse editors lack.
  *
  * Closes the "Line-Oriented Action Bottleneck" at exactly the layer the
@@ -33,6 +33,9 @@ import { installHotReloadingToolCallbacks, runSingleToolCallFromEnv } from './se
 import { log } from './server-helpers-io.js';
 import { registerToolsA } from './server-tools-a.js';
 import { registerToolsB } from './server-tools-b.js';
+import { registerReadCodeTool } from './server-tools-readcode.js';
+import { registerAgentTools } from './server-tools-agent.js';
+import { registerBatchTools } from './server-tools-batch.js';
 import { registerToolsC } from './server-tools-c.js';
 import { registerToolsD } from './server-tools-d.js';
 import { registerToolsE1 } from './server-tools-e1.js';
@@ -50,7 +53,12 @@ import { registerToolsLens } from './server-tools-lens.js';
 import { registerToolsSession } from './server-tools-session.js';
 import { registerToolsPositiveBytes } from './server-tools-positive-bytes.js';
 import { registerToolsY } from './server-tools-y.js';
+import { registerToolsCodexConfig } from './server-tools-codex-config.js';
+import { registerToolsGit } from './server-tools-git.js';
 import { registerToolsSelf } from './server-tools-self.js';
+import { registerToolsSelfEvolution } from './server-tools-self-evolution.js';
+import { registerToolsDisproof } from './server-tools-disproof.js';
+import { registerToolsChromeDevtools } from './server-tools-chrome-devtools.js';
 
 type RegisteredToolForList = {
   title?: string;
@@ -152,11 +160,14 @@ function installCodexSafeToolList(serverInstance: McpServer): void {
 }
 
 
-const server = new McpServer({ name: 'atomic-os', version: '3.0.0' });
+const server = new McpServer({ name: 'kloel-atomic-edit', version: '4.0.0' });
 const hotToolRegistry = installHotReloadingToolCallbacks(server, { log });
 
 registerToolsA(server);
 registerToolsB(server);
+registerReadCodeTool(server);
+registerAgentTools(server);
+registerBatchTools(server);
 registerToolsC(server);
 registerToolsD(server);
 registerToolsE1(server);
@@ -174,7 +185,12 @@ registerToolsLens(server);
 registerToolsSession(server);
 registerToolsPositiveBytes(server);
 registerToolsY(server);
+registerToolsCodexConfig(server);
+registerToolsGit(server);
 registerToolsSelf(server);
+registerToolsSelfEvolution(server);
+registerToolsDisproof(server);
+registerToolsChromeDevtools(server);
 installCodexSafeToolList(server);
 
 async function main(): Promise<void> {

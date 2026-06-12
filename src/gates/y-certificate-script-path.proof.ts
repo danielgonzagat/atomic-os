@@ -40,7 +40,7 @@ async function main(): Promise<void> {
       const domain = domains.find((entry) => entry.domain === domainName);
       check(domainName + ' domain is present', domain !== undefined, JSON.stringify(body));
       const evidence = String(domain?.evidence ?? '');
-      check(domainName + ' no longer points at missing scripts/mcp module', !evidence.includes("Cannot find module '<your-repo>/scripts/mcp/"), evidence);
+      check(domainName + ' no longer points at missing scripts/mcp module', !evidence.includes("Cannot find module '/Users/danielpenin/whatsapp_saas/scripts/mcp/"), evidence);
     }
   } finally {
     try {

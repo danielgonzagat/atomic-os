@@ -36,6 +36,11 @@ export function partG(): void {
     /behaviou?r is NOT proven|NOT proven by this tool/i.test(fb.notProven),
     fb.notProven,
   );
+  check(
+    'founder: nonTouched does not claim protected status without governance gate',
+    !/\bprotected files\b/i.test(fb.nonTouched) && /governance gate/i.test(fb.nonTouched),
+    fb.nonTouched,
+  );
   // structural-only language is honestly a weaker promise class
   const fbS = buildFounderBlock({
     file: 'main.py',
@@ -144,10 +149,10 @@ export function partH(): void {
       const r = runWsc(tempDir, ['--allow', 'a.ts', '--allow', 'c.ts', '--allow', 'sub/d.ts']);
       check(
         'wsc: all files allowed exits 0',
-        r.status === 0 && r.stdout.includes('✓ All changed files within allowlist'),
+        r.status === 0 && r.stdout.includes('\u2713 All changed files within allowlist'),
         `exit=${r.status} stdout=${r.stdout.substring(0, 200)}`,
       );
-      check('wsc: marks allowed files with check', r.stdout.includes('✓ a.ts'), r.stdout);
+      check('wsc: marks allowed files with check', r.stdout.includes('\u2713 a.ts'), r.stdout);
     }
 
     // Test 2: file outside allowlist → exit 1
@@ -158,7 +163,7 @@ export function partH(): void {
         r.status === 1 && r.stdout.includes('VIOLATIONS'),
         `exit=${r.status} stdout=${r.stdout.substring(0, 200)}`,
       );
-      check('wsc: marks violating file with cross', r.stdout.includes('✗ a.ts'), r.stdout);
+      check('wsc: marks violating file with cross', r.stdout.includes('\u2717 a.ts'), r.stdout);
     }
 
     // Test 3: required file present → exit 0

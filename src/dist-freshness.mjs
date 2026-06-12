@@ -33,6 +33,9 @@ const SOURCE_EXTENSIONS = new Set(['.ts', '.mjs', '.json', '.sh']);
 const DIST_EXTENSIONS = new Set(['.js', '.mjs', '.json']);
 const SKIP_DIRS = new Set([
   'dist',
+  'dist-lkg',
+  'dist.broken-last',
+  'launcher-blessed',
   'node_modules',
   '.atomic',
   '.git',
@@ -52,10 +55,17 @@ function skipGeneratedName(name) {
     name.startsWith('.self-expansion-') ||
     name.startsWith('.security-mono-proof-') ||
     name.startsWith('.atomic-exec-sandbox') ||
+    name.startsWith('atomic-exec-broker-file-') ||
+    name.startsWith('atomic-edit-dist-') ||
+    name.startsWith('atomic-universal-') ||
     name.startsWith('.property-proof-') ||
     name.startsWith('.findings-') ||
     name.startsWith('.findings-probe-') ||
+    name.startsWith('property-gate-') ||
+    name.startsWith('probe-gate-') ||
+    name.startsWith('atomic-type-gate-') ||
     name.startsWith('.external-runtime-denial-') ||
+    name.startsWith('.supervisor-') ||
     name === '.build-manifest.json'
   );
 }

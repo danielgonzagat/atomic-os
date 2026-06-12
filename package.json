@@ -1,8 +1,8 @@
 {
   "name": "atomic-os",
-  "version": "3.16.0",
+  "version": "4.0.0",
   "private": false,
-  "description": "Atomic OS — the complete 83-tool structured-read + atomic-edit MCP that turns any AI CLI agent into a surgical, verifiable, universal (multi-language) code engineer. Every mutation flows through a firewall: sha256 + syntax-validate + char-level trace + protected-file guard + rollback. Byte-positivity law (destroying correct bytes requires a written proofOfIncorrectness). Content/anchor-addressed editing (no line/column math), multi-file atomic transactions, named transactional sessions (rollback/commit as one unit), guarded command execution, a convergence/proof gate lattice, LSP WorkspaceEdit apply, native ripgrep/glob/tree-sitter, and a bypass-rate meter.",
+  "description": "Atomic-edit MCP: verified-transaction code mutation engine with a self-contained universal (multi-language) tree-sitter engine on web-tree-sitter (WASM). Zero native binary, zero PI dependency.",
   "license": "MIT",
   "type": "commonjs",
   "author": "danielgonzagat",
@@ -44,7 +44,7 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "tree-sitter-bash": "^0.25.1",
     "tree-sitter-c": "^0.24.1",
     "tree-sitter-cpp": "^0.23.4",
@@ -59,7 +59,10 @@
     "ts-morph": "^28.0.0",
     "typescript": "^5.5.0",
     "web-tree-sitter": "^0.26.9",
-    "zod": "^3.23.0"
+    "zod": "^3.23.0",
+    "pg-query-emscripten": "^5.1.0",
+    "tree-sitter-css": "^0.25.0",
+    "tree-sitter-html": "^0.23.2"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

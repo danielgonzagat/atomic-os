@@ -56,7 +56,7 @@ const rows: Row[] = [];
 
 // ── Intention 1: swap a string literal value (the thesis example) ──────────
 {
-  const rel = "src/guard.ts";
+  const rel = "scripts/mcp/atomic-edit/guard.ts";
   const src = read(rel);
   // real literal in that file: "CLAUDE.md"
   const r = applyEdits(rel, src, [
@@ -80,7 +80,7 @@ const rows: Row[] = [];
 
 // ── Intention 2: change one object property value ──────────────────────────
 {
-  const rel = "src/__bench_obj.ts";
+  const rel = "scripts/mcp/atomic-edit/__bench_obj.ts";
   const src =
     "export const config = {\n  retries: 3,\n  timeoutMs: 5000,\n  endpoint: 'https://api.example.com/v1/very/long/path',\n};\n";
   const before = src;
@@ -100,7 +100,7 @@ const rows: Row[] = [];
 
 // ── Intention 3: add a named import (no duplicate) ─────────────────────────
 {
-  const rel = "src/__bench_imp.ts";
+  const rel = "scripts/mcp/atomic-edit/__bench_imp.ts";
   const src = "import { A, B } from './m';\n\nexport const x = A + B;\n";
   // atomic add_import merges into existing decl: payload ≈ name + module
   const atomicChars = "C".length + "./m".length + addressing(rel, 1);
@@ -119,7 +119,7 @@ const rows: Row[] = [];
 
 // ── Intention 4: insert one statement ──────────────────────────────────────
 {
-  const rel = "src/__bench_ins.ts";
+  const rel = "scripts/mcp/atomic-edit/__bench_ins.ts";
   const src = "function f() {\n  const a = compute();\n  return a;\n}\n";
   const r = applyEdits(rel, src, [
     { start: { line: 2, column: 23 }, end: { line: 2, column: 23 }, newText: "\n  log(a);" },
@@ -138,7 +138,7 @@ const rows: Row[] = [];
 
 // ── Intention 5: replace a function body (block-level, the AdaEdit case) ────
 {
-  const rel = "src/guard.ts";
+  const rel = "scripts/mcp/atomic-edit/guard.ts";
   const src = read(rel);
   // line-oriented "minimal" here is actually the whole multi-line function,
   // because a sub-change inside a 10-line fn still forces re-emitting it under

@@ -8,7 +8,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import * as path from "node:path";
 
 const repoRoot = path.resolve(__dirname, "..", "..", "..");
-const TARGET = "src/nav.ts"; // a real, non-protected source file
+const TARGET = "scripts/mcp/atomic-edit/nav.ts"; // a real, non-protected source file
 
 function show(title: string, res: { content: { text: string }[] }) {
   const text = res.content[0]?.text ?? "(no content)";
@@ -18,7 +18,7 @@ function show(title: string, res: { content: { text: string }[] }) {
 (async () => {
   const transport = new StdioClientTransport({
     command: "bash",
-    args: [path.join(repoRoot, "src-mcp-launcher.sh")],
+    args: [path.join(repoRoot, "scripts/mcp/atomic-edit-mcp-launcher.sh")],
     cwd: process.cwd(),
     stderr: "inherit",
   });

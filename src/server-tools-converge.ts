@@ -37,13 +37,13 @@ export function registerToolsConverge(server: McpServer): void {
         'dangling wire is a fact, no heuristic). Optional dynamic gate: pass effectCommand to additionally require ' +
         'that running it stays green AFTER applying — on a non-zero exit the whole mutation is reverted BYTE-EXACT ' +
         '(untracked-inclusive). This makes construction and validation one act: the agent can only commit what ' +
-        'converges green. Default is preview (commit:true to persist).',
+        'converges green. Persists by default (commit:false for preview-only).',
       inputSchema: {
         mutations: z
           .array(z.object({ file: z.string(), newText: z.string() }))
           .min(1)
           .describe('candidate: full new content per repo-relative file'),
-        commit: z.boolean().optional().describe('persist if it converges green (default false = preview only)'),
+        commit: z.boolean().optional().describe('set to false for preview-only (default: true = persist if green)'),
         effectCommand: z
           .string()
           .optional()
@@ -76,12 +76,12 @@ export function registerToolsConverge(server: McpServer): void {
               `Nothing written — only a green-convergent mutation commits.`,
           });
         }
-        if (!a.commit) {
+        if (a.commit === false) {
           return ok({
             converged: true,
             committed: false,
             gates: conv.gates,
-            summaryForHuman: `✅ converges green (${conv.gates.map((g) => g.gate).join(' + ')}). preview — not written (commit:true to persist).`,
+            summaryForHuman: `✅ converges green (${conv.gates.map((g) => g.gate).join(' + ')}). preview — not written (default is persist; set commit:false for preview).`,
           });
         }
 
