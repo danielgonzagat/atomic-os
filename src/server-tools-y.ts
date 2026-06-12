@@ -31,10 +31,12 @@ const MANDATORY_MCP_CONTROLLED_DOMAINS: readonly string[] = [
   'bypassObserverDenyIntegration',
   'atomicityAudit',
   'selfExpansionValidatorLattice',
+  'selfEvolutionAdmission',
   'capabilityMonotonicity',
   'atomicExecReadOnlyUsability',
   'codexAtomicOnlyProtocol',
   'codexEntrypointContract',
+  'agentHookRuntimeBoundary',
   'codexHostWiring',
   'mcpLauncherHostBoundary',
   'universalStructuralEngine',
@@ -44,18 +46,42 @@ const MANDATORY_MCP_CONTROLLED_DOMAINS: readonly string[] = [
 
 const RUNTIME_SOURCE_EXTENSIONS = new Set(['.ts', '.mjs', '.json', '.sh']);
 const RUNTIME_DIST_EXTENSIONS = new Set(['.js', '.mjs', '.json']);
-const RUNTIME_HASH_SKIP_DIRS = new Set(['dist', 'node_modules', '.atomic', '.git', 'node-compile-cache']);
+const RUNTIME_HASH_SKIP_DIRS = new Set([
+  'dist',
+  'dist-lkg',
+  'launcher-blessed',
+  'node_modules',
+  '.atomic',
+  '.git',
+  'node-compile-cache',
+  '.claude',
+  '.mcp-cache',
+  '.turbo',
+  '.cache',
+  'build',
+  '.positive-byte-sessions',
+]);
 const Y_CERTIFICATE_DELEGATE_DEPTH_ENV = 'ATOMIC_Y_CERTIFICATE_DELEGATE_DEPTH';
 const Y_CERTIFICATE_FORCE_STALE_ENV = 'ATOMIC_Y_CERTIFICATE_FORCE_STALE';
 
 function skipRuntimeHashEntry(name: string): boolean {
   return (
+    name.startsWith('.proof-') ||
+    name.startsWith('.smoke-') ||
+    name.startsWith('.self-expansion-') ||
     name.startsWith('.security-mono-proof-') ||
     name.startsWith('.atomic-exec-sandbox') ||
+    name.startsWith('.external-runtime-denial-') ||
+    name.startsWith('atomic-exec-broker-file-') ||
+    name.startsWith('atomic-edit-dist-') ||
+    name.startsWith('atomic-universal-') ||
     name.startsWith('.property-proof-') ||
     name.startsWith('.findings-') ||
     name.startsWith('.findings-probe-') ||
-    name.startsWith('.external-runtime-denial-') ||
+    name.startsWith('property-gate-') ||
+    name.startsWith('probe-gate-') ||
+    name.startsWith('atomic-type-gate-') ||
+    name.startsWith('.supervisor-') ||
     name === '.build-manifest.json'
   );
 }
@@ -208,12 +234,21 @@ function jsonScriptEnv(root: string): NodeJS.ProcessEnv {
 
 function jsonScriptMustRunHostDirect(name: string): boolean {
   return new Set([
+    'gates/whole-host-sandbox-launcher.proof.mjs',
+    'gates/no-bypass-static-policy.proof.mjs',
+    'bypass-report.mjs',
+    'gates/codex-bypass-observer-wiring.proof.mjs',
+    'audit-atomicity.mjs',
+    'gates/self-expansion-validator-lattice.proof.mjs',
+    'gates/self-evolution-mcp-tool.proof.mjs',
+    'gates/security-monotonicity.proof.mjs',
     'gates/atomic-exec-readonly-usability.proof.mjs',
+    'codex-atomic-only-hook.proof.mjs',
+    'gates/codex-entrypoint-contract.proof.mjs',
+    'gates/agent-hook-runtime-boundary.proof.mjs',
+    'gates/mcp-launcher-host-boundary.proof.mjs',
     'gates/atomic-exec-sandbox.proof.mjs',
     'gates/external-runtime-denial.proof.mjs',
-    'gates/mcp-launcher-host-boundary.proof.mjs',
-    'gates/codex-entrypoint-contract.proof.mjs',
-    'gates/whole-host-sandbox-launcher.proof.mjs',
   ]).has(name);
 }
 
@@ -260,6 +295,7 @@ function runJsonScriptDirect(
       timeout: timeoutMs,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: jsonScriptEnv(root),
+      maxBuffer: 64 * 1024 * 1024,
     });
     return parseJsonScriptOutput(out);
   } catch (e) {
@@ -284,7 +320,7 @@ function runJsonScriptViaBroker(
     input: JSON.stringify({ command, cwd: root, effectRoot: root, timeoutMs, env }),
     encoding: 'utf8',
     timeout: timeoutMs + 5000,
-    maxBuffer: 16 * 1024 * 1024,
+    maxBuffer: 64 * 1024 * 1024,
   });
   if (result.error) return jsonScriptError(result.error);
 
@@ -659,7 +695,7 @@ export function registerToolsY(server: McpServer): void {
           detail: bypassObserverProof.ok ? bypassObserverProof.value : undefined,
         });
         if (a.includeAudits) {
-          const audit = runJsonScript('audit-atomicity.mjs', ['--strict-ratio', '--strict-current-topology', '--json']);
+          const audit = runJsonScript('audit-atomicity.mjs', ['--strict-ratio', '--strict-current-topology', '--json'], 60000);
           if (audit.ok) {
             domains.push({
               domain: 'atomicityAudit',
@@ -708,6 +744,22 @@ export function registerToolsY(server: McpServer): void {
             ? undefined
             : 'Repair atomic_expand_self so every self-expansion runs the mandatory build/type/runtime-freshness/semantic/contract/behavior/security/test/ledger/certificate/runtime/usability/no-bypass validator lattice before acceptance.',
           detail: selfExpansionValidatorLattice.ok ? selfExpansionValidatorLattice.value : undefined,
+        });
+
+        const selfEvolutionAdmission = runJsonScript('gates/self-evolution-mcp-tool.proof.mjs', ['--json'], 120000);
+        const selfEvolutionAdmissionGreen = selfEvolutionAdmission.ok && selfEvolutionAdmission.value.ok === true;
+        domains.push({
+          domain: 'selfEvolutionAdmission',
+          status: selfEvolutionAdmissionGreen ? 'GREEN' : 'RED',
+          evidence: selfEvolutionAdmissionGreen
+            ? 'self-evolution-mcp-tool.proof.mjs passed: atomic_self_evolution is a callable Atomic MCP capability, emits promotion/archive receipts, and rejects self-consistent forged receipts as verifier output.'
+            : selfEvolutionAdmission.ok
+              ? `self-evolution MCP proof reported non-green: ${JSON.stringify(selfEvolutionAdmission.value)}`
+              : `self-evolution MCP proof could not run: ${selfEvolutionAdmission.error}`,
+          requiredChange: selfEvolutionAdmissionGreen
+            ? undefined
+            : 'Repair atomic_self_evolution registration, single-call reachability, promotion receipt verification, or forged-receipt rejection before any Y certificate can claim self-evolution admission.',
+          detail: selfEvolutionAdmission.ok ? selfEvolutionAdmission.value : undefined,
         });
 
         const capabilityMonotonicity = runJsonScript('gates/security-monotonicity.proof.mjs', ['--json'], 120000);
@@ -768,6 +820,22 @@ export function registerToolsY(server: McpServer): void {
             ? undefined
             : 'Repair Codex config, workspace hook chain, no-bypass proof, or host launcher contract before accepting any Y certificate as no-bypass capable.',
           detail: codexEntrypointProof.ok ? codexEntrypointProof.value : undefined,
+        });
+
+        const agentHookRuntimeProof = runJsonScript('gates/agent-hook-runtime-boundary.proof.mjs', ['--json'], 120000);
+        const agentHookRuntimeGreen = agentHookRuntimeProof.ok && agentHookRuntimeProof.value.ok === true;
+        domains.push({
+          domain: 'agentHookRuntimeBoundary',
+          status: agentHookRuntimeGreen ? 'GREEN' : 'RED',
+          evidence: agentHookRuntimeGreen
+            ? 'agent-hook-runtime-boundary.proof.mjs passed: Codex and Claude Stop hooks launch through absolute wrappers, lint under empty PATH, reject PATH-dependent fixtures, and keep trace coverage visible.'
+            : agentHookRuntimeProof.ok
+              ? `agent hook runtime-boundary proof reported non-green: ${JSON.stringify(agentHookRuntimeProof.value)}`
+              : `agent hook runtime-boundary proof could not run: ${agentHookRuntimeProof.error}`,
+          requiredChange: agentHookRuntimeGreen
+            ? undefined
+            : 'Repair Codex/Claude Stop hook commands and wrappers so they are absolute, PATH-independent, shell-syntax-valid under empty PATH, and covered by trace audit before accepting Y.',
+          detail: agentHookRuntimeProof.ok ? agentHookRuntimeProof.value : undefined,
         });
 
         const userConfigPath = path.join(process.env.HOME ?? '', '.codex/config.toml');
@@ -914,6 +982,9 @@ export function registerToolsY(server: McpServer): void {
         });
 
         const bad = blockers(domains);
+        const responseDomains = a.includeAudits
+          ? domains
+          : domains.map(({ detail, ...domain }) => domain);
         const yComplete = bad.length === 0;
         return ok({
           ok: true,
@@ -921,7 +992,7 @@ export function registerToolsY(server: McpServer): void {
           runtimePid: process.pid,
           yComplete,
           verdict: yComplete ? 'Y_COMPLETE' : 'Y_BLOCKED',
-          domains,
+          domains: responseDomains,
           blockers: bad.map((d) => ({ domain: d.domain, status: d.status, requiredChange: d.requiredChange ?? d.evidence })),
         });
       } catch (e) {

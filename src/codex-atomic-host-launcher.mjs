@@ -18,11 +18,11 @@
  * to cwd, and byte-effect proof still required for mutations. Without the
  * broker, atomic_exec fails closed.
  */
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const SANDBOX_EXEC = '/usr/bin/sandbox-exec';
 const REAL_CODEX = '/opt/homebrew/bin/codex';
@@ -48,6 +48,16 @@ function realpathIfPresent(value) {
   }
 }
 
+function darwinScratchDir(name) {
+  try {
+    const result = spawnSync('/usr/bin/getconf', [name], { encoding: 'utf8' });
+    const scratch = (result.stdout || '').trim().replace(/\/+$/, '');
+    return scratch || null;
+  } catch {
+    return null;
+  }
+}
+
 function codexHomePath() {
   return realpathIfPresent(process.env.CODEX_HOME ?? path.join(os.homedir(), '.codex'));
 }
@@ -60,6 +70,25 @@ function codexRuntimeWriteRules(codexHome) {
   return [subpathWriteRule(codexHome)];
 }
 
+function browserRuntimeWriteRules() {
+  const writable = new Set();
+  for (const name of ['DARWIN_USER_TEMP_DIR', 'DARWIN_USER_CACHE_DIR']) {
+    const scratch = darwinScratchDir(name);
+    if (scratch) {
+      writable.add(scratch);
+      writable.add(realpathIfPresent(scratch));
+    }
+  }
+  for (const crashpadDir of [
+    path.join(os.homedir(), 'Library', 'Application Support', 'Google', 'Chrome', 'Crashpad'),
+    path.join(os.homedir(), 'Library', 'Application Support', 'Chromium', 'Crashpad'),
+  ]) {
+    writable.add(crashpadDir);
+    writable.add(realpathIfPresent(crashpadDir));
+  }
+  return [...writable].map(subpathWriteRule);
+}
+
 function codexRuntimeNetworkRules(codexHome) {
   const escapedCodexHome = sandboxPath(codexHome);
   return [
@@ -70,13 +99,15 @@ function codexRuntimeNetworkRules(codexHome) {
 
 function sandboxProfile(writeRoot, brokerSocket, codexHome) {
   const realWriteRoot = fs.realpathSync(writeRoot);
-  const escapedBrokerSocket = brokerSocket ? sandboxPath(brokerSocket) : null;
+  const brokerUsesNetwork = Boolean(brokerSocket) && !String(brokerSocket).startsWith('file://');
+  const escapedBrokerSocket = brokerUsesNetwork ? sandboxPath(brokerSocket) : null;
   return [
     '(version 1)',
     '(deny default)',
     '(allow file-read*)',
     subpathWriteRule(realWriteRoot),
     ...codexRuntimeWriteRules(codexHome),
+    ...browserRuntimeWriteRules(),
     ...codexRuntimeNetworkRules(codexHome),
     // Codex's reasoning stream, DNS, and several MCPs are HTTP/remote.
     // atomic_exec remains network-denied by the out-of-sandbox broker.
@@ -89,8 +120,8 @@ function sandboxProfile(writeRoot, brokerSocket, codexHome) {
     '(allow process*)',
     '(allow mach-lookup)',
     '(allow sysctl-read)',
-    // This broker socket is the explicit bridge back to the out-of-sandbox
-    // broker that applies the stricter per-command sandbox for atomic_exec.
+    // Socket brokers need this explicit bridge. file:// brokers use repo bytes
+    // under the already-writable host root and need no network carve-out.
     ...(escapedBrokerSocket ? ['(allow network-outbound (literal "' + escapedBrokerSocket + '"))'] : []),
   ].join(' ');
 }
@@ -147,9 +178,10 @@ function startBroker() {
   } catch {
     /* best-effort */
   }
-  const socket = path.join(atomicDir, `codex-broker-${process.pid}.sock`);
+  const brokerDir = path.join(atomicDir, `codex-broker-${process.pid}`);
+  const socket = pathToFileURL(brokerDir).href;
   try {
-    fs.rmSync(socket, { force: true });
+    fs.rmSync(brokerDir, { recursive: true, force: true });
   } catch {
     /* fresh */
   }
@@ -170,7 +202,7 @@ function startBroker() {
       if (String(data).includes('ATOMIC_BROKER_READY') && !settled) {
         settled = true;
         clearTimeout(timer);
-        resolve({ child, socket });
+        resolve({ child, socket, cleanupPath: brokerDir });
       }
     });
     child.stderr.on('data', (data) => process.stderr.write('[atomic-exec-broker] ' + data));
@@ -194,7 +226,7 @@ if (!fs.existsSync(SANDBOX_EXEC)) {
 }
 
 startBroker()
-  .then(({ child: brokerChild, socket }) => {
+  .then(({ child: brokerChild, socket, cleanupPath }) => {
     const codexHome = codexHomePath();
     writeBrokerState(socket, codexHome);
     const child = spawn(SANDBOX_EXEC, ['-p', sandboxProfile(repoRoot, socket, codexHome), ...normalizeAgentCommand(command)], {
@@ -210,7 +242,7 @@ startBroker()
         /* best-effort */
       }
       try {
-        fs.rmSync(socket, { force: true });
+        fs.rmSync(cleanupPath ?? socket, { recursive: true, force: true });
       } catch {
         /* best-effort */
       }

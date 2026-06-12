@@ -11,7 +11,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 const repoRoot = path.resolve(__dirname, "..", "..", "..");
-const TARGET = "src/server.ts";
+const TARGET = "scripts/mcp/atomic-edit/server.ts";
 const sha = (s: string) => crypto.createHash("sha256").update(s).digest("hex");
 const j = (r: { content: { text: string }[] }) => {
   const text = r.content[0]?.text;
@@ -22,7 +22,7 @@ const j = (r: { content: { text: string }[] }) => {
 (async () => {
   const transport = new StdioClientTransport({
     command: "bash",
-    args: [path.join(repoRoot, "src-mcp-launcher.sh")],
+    args: [path.join(repoRoot, "scripts/mcp/atomic-edit-mcp-launcher.sh")],
     cwd: process.cwd(),
     stderr: "inherit",
   });
@@ -61,7 +61,7 @@ const j = (r: { content: { text: string }[] }) => {
     const out = j(
       await client.callTool({
         name: "code_outline",
-        arguments: { file: "src/guard.ts" },
+        arguments: { file: "scripts/mcp/atomic-edit/guard.ts" },
       }) as never,
     );
     const readWorks = out.ok === true && out.symbols.some((s: { selector: string }) => s.selector === "resolveSafeTarget");

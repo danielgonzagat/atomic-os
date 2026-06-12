@@ -138,10 +138,10 @@ export function makeContext(
     return cands.find((c) => existsInTree(c)) ?? null;
   };
   // Find the package root (frontend/backend/worker) the importing file lives under,
-  // for the the host project '@/*' -> '<package>/src/*' convention. null if the file is not
+  // for the KLOEL '@/*' -> '<package>/src/*' convention. null if the file is not
   // inside one of the three workspace packages (then '@/' cannot be expanded by
   // convention and only an explicit tsconfig `paths` entry can resolve it).
-  const aliasPkgRoot = (fromRel: string): string | null => {
+  const kloelPkgRoot = (fromRel: string): string | null => {
     for (const pkg of ['frontend', 'backend', 'worker']) {
       if (fromRel.startsWith(`${pkg}/`)) return pkg;
     }
@@ -230,7 +230,7 @@ export function makeContext(
       // path-alias resolution (red class #6) BEFORE giving up. Two sources:
       //   (1) the nearest tsconfig.json's compilerOptions.paths — the general,
       //       config-driven truth (handles any project's alias, not just '@/').
-      //   (2) the host project's '@/*' -> '<package>/src/*' convention — applied when tsconfig
+      //   (2) KLOEL's '@/*' -> '<package>/src/*' convention — applied when tsconfig
       //       paths did not resolve it (backend/worker use '@/' by convention with
       //       no explicit `paths` entry). Keyed off the importing file's package.
       // If neither expands+probes to a real file, fall through to null. null now
@@ -241,7 +241,7 @@ export function makeContext(
       const viaTsconfig = resolveTsconfigAlias(fromRel, spec);
       if (viaTsconfig !== null) return viaTsconfig;
       if (spec.startsWith('@/')) {
-        const pkg = aliasPkgRoot(norm(fromRel));
+        const pkg = kloelPkgRoot(norm(fromRel));
         const rest = spec.slice(2);
         // Inside a package → that package's src. Outside (e.g. a script) → try all
         // three packages' src (sound: the '@/' could legitimately mean any of them

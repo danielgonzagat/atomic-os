@@ -10,7 +10,7 @@ export function partE(): void {
   // grapheme segmentation: ZWJ family is ONE user-perceived character
   check('grapheme: ZWJ family = 1', graphemeLength('👨‍👩‍👧‍👦') === 1, String(graphemeLength('👨‍👩‍👧‍👦')));
   check('grapheme: astral emoji = 1', graphemeLength('😀') === 1, String(graphemeLength('😀')));
-  check('grapheme: combining accent = 1', graphemeLength('é') === 1, String(graphemeLength('é')));
+  check('grapheme: combining accent = 1', graphemeLength('é') === 1, String(graphemeLength('é')));
 
   // measure: emoji string is non-ascii and counts differ across units
   const mu = measure('a😀b');
@@ -34,7 +34,7 @@ export function partE(): void {
   check('charDiff: accent edit grapheme-clean', !d2.includes('�'), JSON.stringify(d2));
 
   // every grapheme round-trips (join === original) for a mixed string
-  const mix = 'x=1; π≈3.14 😀👨‍👩‍👧‍👦 é';
+  const mix = 'x=1; π≈3.14 😀👨‍👩‍👧‍👦 é';
   check('grapheme: lossless round-trip', graphemes(mix).join('') === mix, 'join mismatch');
 }
 

@@ -1,4 +1,4 @@
-# atomic-os MCP server
+# kloel-atomic-edit MCP server (v4)
 
 Closes the **Line-Oriented Action Bottleneck**: built-in coding-agent editors
 operate at line/block/hunk granularity, so microscopic intentions become
@@ -17,7 +17,7 @@ research identifies as defective.
 | **Aider edit-format study** | Edit format materially changes model output (lazy-coding 3×, pass 26%→61%). → strict pre-write validation + preview. |
 | **Diff-XYZ / Kiro** | Fragile line offsets bad; semantic rename must come from the language service, not LLM text guessing. → `atomic_rename_symbol_cross_file` via tsconfig. |
 
-## Tools (25)
+## Tools (114)
 
 **Read (address by name, not line guess):**
 - `code_browse` — structured directory listing
@@ -25,7 +25,7 @@ research identifies as defective.
 - `code_read_symbol` — scoped selector → full unit + exact range
 
 **Edit (every mutating op: syntax-regression check → atomic write; `preview:true` = dry-run diff; optional `expectedSha256` = optimistic-concurrency guard):**
-- **`atomic_replace_text`** — verbatim `oldText`→`newText`, builtin-`edit` ergonomics (no coordinates) + full validation. **Prefer over builtin `edit` for any multi-line/block change.**
+- **`atomic_replace_text`** — verbatim `oldText`→`newText`, built-in `edit` ergonomics (no coordinates) + full validation. **Prefer over built-in `edit` for any multi-line/block change.**
 - `atomic_replace_range` / `atomic_insert_at` / `atomic_delete_range`
 - `atomic_apply_edits` — LSP `TextEdit[]`, N sites = one all-or-nothing intention
 - `atomic_replace_literal` — swap a literal selected via the AST, by value
@@ -67,14 +67,14 @@ research identifies as defective.
 
 ```sh
 npx tsx scripts/mcp/atomic-edit/smoke.ts
-# 83 passed, 0 failed — engine + live MCP stdio round-trip (25 tools)
+# 47 passed, 0 failed — engine + live MCP stdio round-trip (114 tools)
 #   + preview dry-run + cross-file rename via real tsconfig
 #   + sha256 concurrency guard + import/property ops
 #   + governance-guard refusal of CLAUDE.md
 #   + product intent / trust / behavior / truth / continuity / lock tools
 
 node scripts/mcp/atomic-edit/smoke.mjs
-# 83 passed, 0 failed — production launcher/dist path
+# 47 passed, 0 failed — production launcher/dist path
 
 node scripts/mcp/atomic-edit/audit-atomicity.mjs --json
 # pass=true, atomic_edit_ratio=1, fallback_rate=0, coarse_unjustified=0

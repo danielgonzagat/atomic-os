@@ -6,14 +6,14 @@ every change is the smallest faithful mutation, proven character-by-character,
 validated before it's written, reversible, and where destroying correct bytes
 requires a written proof.**
 
-[![tools](https://img.shields.io/badge/tools-83-E85D30)](#what-you-get--83-tools)
+[![tools](https://img.shields.io/badge/tools-114-E85D30)](#what-you-get--114-tools)
 [![languages](https://img.shields.io/badge/structural%20edit-multi--language%20WASM-blue)](#the-universal-engine-multi-language-pure-wasm)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![smoke](https://img.shields.io/badge/smoke-20%2F20-success)](#verify-it-yourself)
 [![benchmark](https://img.shields.io/badge/AtomicBench-98%25%20bytes%20avoided%20vs%20line-E85D30)](docs/BENCHMARK.md)
 
 > This is the **complete** Atomic OS — the full engine we run in production,
-> generalized for any repo: 83 tools, the universal multi-language engine, the
+> generalized for any repo: 114 tools, the universal multi-language engine, the
 > write firewall, transactional sessions, guarded command execution, the
 > byte-positivity law, and the proof/convergence governance layer.
 
@@ -141,7 +141,7 @@ git clone https://github.com/danielgonzagat/atomic-os
 cd atomic-os
 npm install        # pulls web-tree-sitter + grammars (the self-contained universal engine; no native binary)
 npm run build      # compiles src/ -> src/dist/ and records the build manifest
-npm test           # 20/20 smoke: build + live handshake + a proven edit + a transactional session
+npm test           # 47/47 smoke: build + live handshake + proven edits + transactional sessions + MCP trust checks
 ```
 
 Then wire the launcher into your AI CLI's MCP config. The server **anchors to the
@@ -169,7 +169,7 @@ Full setup, including the optional deny-hook: [`docs/INSTALL.md`](docs/INSTALL.m
 
 ---
 
-## What you get — 83 tools
+## What you get — 114 tools
 
 | Group | Tools (highlights) | What it gives you |
 |---|---|---|
@@ -188,7 +188,7 @@ Full setup, including the optional deny-hook: [`docs/INSTALL.md`](docs/INSTALL.m
 | **Files & governance** | `atomic_create_file`, `atomic_delete_file`, `atomic_lock_acquire/release`, `code_file_stat` | Firewall-guarded create/delete + multi-agent locks. |
 | **Proof & measurement** | `atomic_bypass_report`, `truth_receipt`, `behavior_receipt`, `zero_code_trust_score`, `product_intent_contract`, `continuity_status` | The bypass-rate meter + trust/proof/continuity receipts. |
 
-Run `tools/list` against the server for the full, current set (83 tools).
+Run `tools/list` against the server for the full, current set (114 tools).
 
 ---
 
@@ -274,7 +274,7 @@ The repo-containment boundary always applies. To pin the repo root explicitly
 
 ```bash
 npm test
-#  PASS  server lists >= 60 tools (got 83)
+#  PASS  server lists >= 60 tools (got 114)
 #  PASS  tool present: atomic_replace_at / atomic_ast_edit / atomic_rename_symbol_universal / ...
 #  PASS  atomic_replace_at applied              (a negative-byte edit, allowed via proofOfIncorrectness)
 #  PASS  edit persisted (greet->salute)
@@ -405,7 +405,7 @@ proves it preserved the rest of the product.
 
 ```
 src/                     the MCP server (compiles to src/dist/)
-  server.ts              entrypoint — registers all 83 tools across the groups
+  server.ts              entrypoint — registers all 114 tools across the groups
   engine*.ts             the edit engine (apply, validate, zones, rename, universal)
   guard.ts               repo-containment + your protected-file config
   native-bridge.ts       the universal engine — web-tree-sitter (WASM), in-process
@@ -414,7 +414,7 @@ src/                     the MCP server (compiles to src/dist/)
   gates/                 the convergence/proof gate lattice (perception, contract, algebra, …)
   dist-freshness.mjs     the runtime stale-build guard + build manifest
   build.mjs              self-contained compiler (no tsx/npx/network)
-  smoke.mjs              standalone end-to-end proof (20/20)
+  smoke.mjs              standalone end-to-end proof (47/47)
 docs/                    INSTALL, GOVERNANCE, OPERATING_GUIDE, the PRINCIPLE
 integrations/            per-CLI setup (claude / opencode / codex)
 atomic-edit.protected.example.json   copy → atomic-edit.protected.json

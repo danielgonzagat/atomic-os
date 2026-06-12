@@ -27,7 +27,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { REPO_ROOT } from './guard.js';
+import { REPO_ROOT, activeWorkspaceRoot, bindWorkspaceRoot, workspaceBindingStatus } from './guard.js';
 import { ok, fail } from './server-helpers-result.js';
 import {
   assertCompleteEffectSnapshot,
@@ -49,12 +49,12 @@ interface Savepoint {
   at: number;
 }
 
-/** An open multi-tool window over REPO_ROOT. */
+/** An open multi-tool window over REPO_ROOT or declared scoped paths. */
 interface Session {
   id: string;
-  /** byte-exact snapshot of REPO_ROOT at begin — the immutable rollback truth */
+  /** byte-exact snapshot at begin — the immutable rollback truth */
   snap: EffectSnapshot;
-  /** Optional repo-relative roots that bound this session's effect surface (advisory). */
+  /** Optional repo-relative roots that bound this session's effect surface. */
   scopePaths?: string[];
   savepoints: Savepoint[];
   startedAt: number;
@@ -118,10 +118,11 @@ function temporalSnapshots(sess: Session, commitEffects: FileEffect[], committed
 function normalizeSessionScope(paths: string[] | undefined): string[] | undefined {
   if (!paths || paths.length === 0) return undefined;
   const scoped = new Set<string>();
+  const baseRoot = activeWorkspaceRoot();
   for (const raw of paths) {
     const trimmed = raw.trim();
     if (!trimmed) throw new Error('atomic_session_begin paths cannot contain empty entries');
-    const abs = path.resolve(REPO_ROOT, trimmed);
+    const abs = path.isAbsolute(trimmed) ? path.resolve(trimmed) : path.resolve(baseRoot, trimmed);
     const rel = path.relative(REPO_ROOT, abs);
     if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
       throw new Error(`atomic_session_begin refused out-of-repo scope path: ${raw}`);
@@ -131,17 +132,57 @@ function normalizeSessionScope(paths: string[] | undefined): string[] | undefine
   return [...scoped].sort();
 }
 
+
 export function registerToolsSession(server: McpServer): void {
+  server.registerTool(
+    'atomic_workspace_bind',
+    {
+      title: 'Bind this MCP process to one workspace root before any relative read/edit/exec',
+      description:
+        'Declares the workspace root for this Atomic MCP process. After binding, every relative path in read/edit/exec tools resolves against this workspace, and absolute paths outside it are refused. Use this as the first ALL-IN worker preflight in linked worktrees or sub-project directories.',
+      inputSchema: {
+        root: z.string().min(1).describe('absolute workspace directory, or repo-relative directory to bind'),
+      },
+    },
+    async (a) => {
+      try {
+        const status = bindWorkspaceRoot(a.root);
+        return ok({ ok: true, ...status, summary: `atomic workspace bound to ${status.activeWorkspaceRoot}` });
+      } catch (e) {
+        return fail(`atomic_workspace_bind failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    },
+  );
+
+  server.registerTool(
+    'atomic_workspace_status',
+    {
+      title: 'Report the active Atomic workspace binding',
+      description:
+        'Read-only preflight: shows the repo root and active workspace root used for relative paths. If declaredBy is repo-root-default, linked-worktree workers should call atomic_workspace_bind before task work.',
+      inputSchema: {},
+    },
+    async () => {
+      try {
+        return ok({ ok: true, ...workspaceBindingStatus() });
+      } catch (e) {
+        return fail(`atomic_workspace_status failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    },
+  );
+
   server.registerTool(
     'atomic_session_begin',
     {
-      title: 'Open a multi-tool atomic window over the repo',
+      title: 'Open a multi-tool atomic window over the repo or declared scoped paths',
       description:
-        'Captures one byte-exact, git-decoupled snapshot of the entire repo root (the same EffectSnapshot ' +
-        'substrate that backs atomic_exec proveEffect — caps + skips node_modules/.git/dist; sets ' +
-        'limitReached on a cap) and returns a sessionId. Every edit/exec tool you run afterwards writes ' +
-        'through atomicWrite as normal — no change to those tools — but the whole sequence is now reversible ' +
-        'as ONE unit: atomic_session_rollback restores the repo byte-exact (untracked-inclusive) to this ' +
+        'Captures one byte-exact, git-decoupled snapshot over either the full repo root or the optional ' +
+        'repo-relative paths[] scope (the same EffectSnapshot substrate that backs atomic_exec proveEffect — ' +
+        'caps + skips node_modules/.git/dist unless a scoped root is explicitly inside a skipped parent; sets ' +
+        'limitReached on a cap) and returns a sessionId. Scoped sessions preserve repo-relative receipts while ' +
+        'avoiding whole-repo snapshot caps in large workspaces. Every edit/exec tool you run afterwards writes ' +
+        'through atomicWrite as normal — no change to those tools — but the declared window is now reversible ' +
+        'as ONE unit: atomic_session_rollback restores the scoped bytes byte-exact (untracked-inclusive) to this ' +
         'instant, atomic_session_savepoint marks a named undo point, atomic_session_commit emits the merged ' +
         'receipt and closes the window. The snapshot is the immutable rollback truth — it never moves.',
       inputSchema: {
@@ -156,9 +197,7 @@ export function registerToolsSession(server: McpServer): void {
     async (a) => {
       try {
         const scopePaths = normalizeSessionScope(a.paths);
-        // src effect helper snapshots whole-repo (no includeRel passthrough yet); a scoped
-        // window therefore captures a SUPERSET of its declared paths — rollback stays correct.
-        const snap = captureEffectSnapshot(REPO_ROOT);
+        const snap = captureEffectSnapshot(REPO_ROOT, scopePaths ? { includeRel: scopePaths } : {});
         assertCompleteEffectSnapshot(snap, 'open atomic session');
         const id = randomUUID();
         const startedAt = Date.now();
