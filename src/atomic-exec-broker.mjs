@@ -498,9 +498,9 @@ process.on('SIGINT', shutdown);
 // parent exit those owners SIGTERM us (handled above). But on an ABNORMAL parent
 // death (SIGKILL, crash, a timeout-killed gate run) no SIGTERM is delivered, and
 // because the broker reads no stdin nothing else signals us: we are reparented to
-// the init process (ppid 1) and would keep listening forever. That orphaning was
-// the dominant source of leaked atomic-exec brokers accumulating until the machine
-// ran out of RAM.
+// launchd (ppid 1) and would keep listening forever. That orphaning was the
+// dominant source of leaked atomic-exec brokers accumulating until the machine ran
+// out of RAM.
 //
 // NB: process.ppid is captured ONCE by Node and is NOT updated on reparent, so we
 // cannot watch it change. Instead record the owning parent's pid at startup and

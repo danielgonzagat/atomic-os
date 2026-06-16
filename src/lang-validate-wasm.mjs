@@ -13,8 +13,7 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const NODE_MODULE_CANDIDATES = [path.join(HERE, 'node_modules'), path.join(path.dirname(HERE), 'node_modules')];
-const NM = NODE_MODULE_CANDIDATES.find((candidate) => fs.existsSync(candidate)) ?? NODE_MODULE_CANDIDATES[0];
+const NM = path.join(HERE, 'node_modules');
 const TREE_SITTER_WASM = {
   css: path.join(NM, 'tree-sitter-css/tree-sitter-css.wasm'),
   html: path.join(NM, 'tree-sitter-html/tree-sitter-html.wasm'),

@@ -36,11 +36,12 @@ function main() {
 
   record(
     results,
-    'atomic_exec hashes full redacted stdout/stderr before capping returned text',
+    'atomic_exec hashes full redacted stdout/stderr before returning capped or compacted text',
     execSource.includes("const stdoutFull = redactAll(res.stdout ?? '')") &&
       execSource.includes("const stderrFull = redactAll(res.stderr ?? '')") &&
-      execSource.includes('const stdout = capText(stdoutFull)') &&
-      execSource.includes('const stderr = capText(stderrFull)') &&
+      execSource.includes('const outputSummary = summarizeTestOutput(a.command, exitCode, stdoutFull, stderrFull)') &&
+      execSource.includes('const stdout = capText(outputSummary.stdout)') &&
+      execSource.includes('const stderr = capText(outputSummary.stderr)') &&
       execSource.includes('const stdoutSha256 = digestText(stdoutFull)') &&
       execSource.includes('const stderrSha256 = digestText(stderrFull)') &&
       execSource.includes('stdoutBytes: byteLength(stdoutFull)') &&
@@ -49,6 +50,7 @@ function main() {
     {
       hasStdoutFull: execSource.includes("const stdoutFull = redactAll(res.stdout ?? '')"),
       hasStderrFull: execSource.includes("const stderrFull = redactAll(res.stderr ?? '')"),
+      hasSummaryBeforeReturnCap: execSource.includes('const outputSummary = summarizeTestOutput(a.command, exitCode, stdoutFull, stderrFull)'),
       hasStdoutHash: execSource.includes('const stdoutSha256 = digestText(stdoutFull)'),
       hasStderrHash: execSource.includes('const stderrSha256 = digestText(stderrFull)'),
       hasReturnLimitReceipt: execSource.includes('outputReturnLimit: EXEC_OUTPUT_RETURN_LIMIT'),
@@ -87,6 +89,70 @@ function main() {
       hasDiffCap: execSource.includes('const atomicDiff = capText(atomicDiffFull)'),
       hasDiffHash: execSource.includes('atomicDiffSha256: digestText(atomicDiffFull)'),
       removedFullDiffReturn: !execSource.includes('...(e.atomicDiff ? { atomicDiff: redactAll(e.atomicDiff) } : {})'),
+    },
+  );
+
+  record(
+    results,
+    'atomic_exec refuses package-runner commands as external package effects',
+    execSource.includes('npx|bunx') &&
+      execSource.includes('pnpm') &&
+      execSource.includes('yarn') &&
+      execSource.includes('package runner can download and execute registry code') &&
+      execSource.includes('external-or-host-effect command refused under Y admission'),
+    {
+      hasNpxBunx: execSource.includes('npx|bunx'),
+      hasPnpm: execSource.includes('pnpm'),
+      hasYarn: execSource.includes('yarn'),
+      hasPackageRunnerReason: execSource.includes('package runner can download and execute registry code'),
+      keepsExternalAdmissionRefusal: execSource.includes('external-or-host-effect command refused under Y admission'),
+    },
+  );
+
+  record(
+    results,
+    'atomic_exec summarizes green TAP stdout while preserving full output receipt',
+    execSource.includes("readonly kind: 'tap-green' | 'tap-red'") &&
+      execSource.includes('function summarizeTestOutput') &&
+      execSource.includes('TAP version 13') &&
+      execSource.includes('[atomic_exec:test-summary]') &&
+      execSource.includes('full_stdout_sha256=') &&
+      execSource.includes('const outputSummary = summarizeTestOutput') &&
+      execSource.includes('const stdout = capText(outputSummary.stdout)') &&
+      execSource.includes('stdoutSha256 = digestText(stdoutFull)') &&
+      execSource.includes('stdoutSummary: outputSummary.summary'),
+    {
+      hasSummaryKindUnion: execSource.includes("readonly kind: 'tap-green' | 'tap-red'"),
+      hasSummaryFunction: execSource.includes('function summarizeTestOutput'),
+      detectsTap: execSource.includes('TAP version 13'),
+      hasCompactMarker: execSource.includes('[atomic_exec:test-summary]'),
+      hasFullOutputHashMarker: execSource.includes('full_stdout_sha256='),
+      preservesFullHash: execSource.includes('stdoutSha256 = digestText(stdoutFull)'),
+      exposesSummary: execSource.includes('stdoutSummary: outputSummary.summary'),
+    },
+  );
+
+  record(
+    results,
+    'atomic_exec summarizes failing TAP stdout instead of returning raw red logs',
+    execSource.includes("readonly kind: 'tap-green' | 'tap-red'") &&
+      execSource.includes('function compactFailingTapLines') &&
+      execSource.includes('TAP_FAILURE_LINE_LIMIT = 80') &&
+      execSource.includes('TAP test command exited non-zero; returning compact failure stdout') &&
+      execSource.includes("const kind: ExecOutputSummary['kind']") &&
+      execSource.includes("kind === 'tap-red' ? compactFailingTapLines") &&
+      execSource.includes('failing TAP excerpts') &&
+      execSource.includes("failureLines: kind === 'tap-red' ? failureLines : undefined") &&
+      !execSource.includes('exitCode !== 0 ||\n    !isLikelyTestCommand(command)'),
+    {
+      hasKindUnion: execSource.includes("readonly kind: 'tap-green' | 'tap-red'"),
+      hasFailureCompactor: execSource.includes('function compactFailingTapLines'),
+      hasFailureLimit: execSource.includes('TAP_FAILURE_LINE_LIMIT = 80'),
+      hasRedHeadline: execSource.includes('TAP test command exited non-zero; returning compact failure stdout'),
+      selectsRedKind: execSource.includes("const kind: ExecOutputSummary['kind']"),
+      callsFailureCompactor: execSource.includes("kind === 'tap-red' ? compactFailingTapLines"),
+      exposesFailureLines: execSource.includes("failureLines: kind === 'tap-red' ? failureLines : undefined"),
+      removedRawRedReturn: !execSource.includes('exitCode !== 0 ||\n    !isLikelyTestCommand(command)'),
     },
   );
 

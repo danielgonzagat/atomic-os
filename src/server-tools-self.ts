@@ -1,6 +1,7 @@
 import * as childProcess from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { resolveSafeTarget, REPO_ROOT } from './guard.js';
@@ -45,6 +46,7 @@ const MANDATORY_SELF_EXPANSION_VALIDATORS: readonly SelfExpansionValidator[] = [
   { phase: 'reachability', command: 'node dist/gates/reachability-gate.proof.js' },
   { phase: 'binding', command: 'node dist/gates/binding-gate.proof.js' },
   { phase: 'convergence', command: 'node gates/converge-operator.proof.mjs' },
+  { phase: 'convergence', command: 'node gates/converge-symbol-mutation.proof.mjs --json' },
   { phase: 'runtime-probe', command: 'node dist/gates/probe-convergence-gate.proof.js' },
   { phase: 'formal', command: 'node dist/gates/formal-gate.proof.js' },
   { phase: 'property', command: 'node dist/gates/property-gate.proof.js' },
@@ -67,12 +69,18 @@ const MANDATORY_SELF_EXPANSION_VALIDATORS: readonly SelfExpansionValidator[] = [
   { phase: 'benchmark', command: 'node gates/atomic-agent-bench.proof.mjs' },
   { phase: 'test', command: 'node gates/test-execution-gate.proof.mjs --json' },
   { phase: 'ledger', command: 'node proof-chain.proof.mjs --json' },
+  { phase: 'ledger', command: 'node gates/proof-snapshot-compact.proof.mjs --json' },
+  { phase: 'ledger', command: 'node gates/proof-ledger-external-root.proof.mjs --json' },
   { phase: 'certificate', command: 'node gates/y-certificate-mandatory-domains.proof.mjs --json' },
   { phase: 'runtime', command: 'node gates/codex-entrypoint-contract.proof.mjs --json' },
   { phase: 'agent-runtime', command: 'node gates/agent-hook-runtime-boundary.proof.mjs --json' },
+  { phase: 'agent-runtime', command: 'node gates/opencode-allin-permission-policy.proof.mjs --json' },
   { phase: 'runtime', command: 'node gates/compiled-mcp-y-certificate.proof.mjs --json' },
   { phase: 'usability', command: 'node gates/atomic-exec-readonly-usability.proof.mjs --json' },
   { phase: 'usability', command: 'node gates/atomic-exec-output-compact.proof.mjs --json' },
+  { phase: 'usability', command: 'node gates/mcp-tool-list-compact.proof.mjs --json' },
+  { phase: 'usability', command: 'node gates/readcode-missing-path-recovery.proof.mjs --json' },
+  { phase: 'usability', command: 'node gates/readcode-selector-error-no-recovery.proof.mjs --json' },
   { phase: 'effect-metadata', command: 'node gates/effect-metadata-mode.proof.mjs --json' },
   { phase: 'effect-admission', command: 'node gates/atomic-exec-prove-effect-required.proof.mjs --json' },
   { phase: 'no-bypass', command: 'node gates/atomic-exec-indirection-denial.proof.mjs --json' },
@@ -143,14 +151,32 @@ function proofTimeoutMs(command: string): number {
   return 60000;
 }
 
+function brokerEndpointPath(endpoint: string): string | null {
+  const value = endpoint.trim();
+  if (!value) return null;
+  if (value.startsWith('file://')) {
+    try {
+      const dir = fileURLToPath(value);
+      return fs.existsSync(path.join(dir, 'requests')) && fs.existsSync(path.join(dir, 'responses')) ? value : null;
+    } catch {
+      return null;
+    }
+  }
+  try {
+    return fs.statSync(value).isSocket() ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 function selfExpansionBrokerSocketPath(): string | null {
-  const explicit = process.env.ATOMIC_EXEC_BROKER_SOCKET?.trim();
-  if (explicit && fs.existsSync(explicit)) return explicit;
+  const explicit = brokerEndpointPath(process.env.ATOMIC_EXEC_BROKER_SOCKET ?? '');
+  if (explicit) return explicit;
   const statePath = path.join(REPO_ROOT, '.atomic', 'codex-broker-current.json');
   try {
     const state = JSON.parse(fs.readFileSync(statePath, 'utf8')) as { socket?: unknown };
-    const stateSocket = typeof state.socket === 'string' ? state.socket.trim() : '';
-    if (stateSocket && fs.existsSync(stateSocket)) return stateSocket;
+    const stateSocket = typeof state.socket === 'string' ? brokerEndpointPath(state.socket) : null;
+    if (stateSocket) return stateSocket;
   } catch {
     // Broker state is optional outside host-admitted sessions.
   }

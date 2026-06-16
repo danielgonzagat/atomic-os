@@ -5,16 +5,19 @@ import { ok, fail } from "./server-helpers-result.js";
 import {
   createSession, recordEntry, recordProposal, advancePhase, nextStep,
   incrementAttempt, accept, requestRevision, persistTrajectory,
-  listSessions,
+  listSessions, loadSession,
   type AgentSession, type AgentStep, type AgentProposal, type AgentDecision, type AgentObservation,
 } from "./agent-loop.js";
 
 const sessions = new Map<string, AgentSession>();
 
 function getSession(id: string): AgentSession {
-  const s = sessions.get(id);
-  if (!s) throw new Error("No active session: " + JSON.stringify(id));
-  return s;
+  const cached = sessions.get(id);
+  if (cached) return cached;
+  const loaded = loadSession(REPO_ROOT, id);
+  if (!loaded) throw new Error("No active session: " + JSON.stringify(id));
+  sessions.set(id, loaded);
+  return loaded;
 }
 
 export function registerAgentTools(server: McpServer): void {
@@ -27,7 +30,24 @@ export function registerAgentTools(server: McpServer): void {
     },
   }, async (a) => {
     try {
-      const s = createSession(a.issue, a.steps as AgentStep[]); recordEntry(s, s.plan); sessions.set(s.sessionId, s); persistTrajectory(REPO_ROOT, s); return ok({ok:true,sessionId:s.sessionId,planId:s.plan.planId,phase:s.phase,totalSteps:s.plan.steps.length,complexity:s.plan.complexity});
+      const s = createSession(a.issue, a.steps as AgentStep[]);
+      recordEntry(s, s.plan);
+      advancePhase(s);
+      sessions.set(s.sessionId, s);
+      persistTrajectory(REPO_ROOT, s);
+      return ok({
+        ok: true,
+        sessionId: s.sessionId,
+        planId: s.plan.planId,
+        phase: s.phase,
+        currentStep: s.currentStep,
+        totalSteps: s.plan.steps.length,
+        complexity: s.plan.complexity,
+        fastPathPolicy: {
+          read: 'batch known paths/symbols before serial reads',
+          edit: 'prefer atomic_converge or atomic_batch_replace_text for clustered same-intent edits',
+        },
+      });
     } catch (e) { return fail(e instanceof Error ? e.message : String(e)); }
   });
 

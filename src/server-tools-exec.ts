@@ -254,6 +254,11 @@ const EXTERNAL_OR_HOST_EFFECT_COMMANDS: { re: RegExp; reason: string }[] = [
       'package manager install/publish/deploy can mutate network, caches, hooks, or registries',
   },
   {
+    re: /^(?:npx|bunx|pnpm\s+dlx|yarn\s+dlx)\b/,
+    reason:
+      'package runner can download and execute registry code or mutate caches outside the filesystem byte snapshot',
+  },
+  {
     re: /\b(?:fetch\s*\(|XMLHttpRequest|https?:\/\/|node:https|node:http)\b/,
     reason: 'inline runtime network access is not a filesystem byte effect',
   },
@@ -288,8 +293,28 @@ function classifyCommand(cmd: string): CommandClass {
 
 const SANDBOX_EXEC = '/usr/bin/sandbox-exec';
 
+let sandboxExecUsableCache: boolean | null = null;
 function sandboxExecAvailable(): boolean {
   return fs.existsSync(SANDBOX_EXEC);
+}
+
+function sandboxExecUsable(): boolean {
+  if (!sandboxExecAvailable()) return false;
+  if (sandboxExecUsableCache !== null) return sandboxExecUsableCache;
+  const probe = childProcess.spawnSync(
+    SANDBOX_EXEC,
+    ['-p', atomicSandboxProfile(null, null), '/bin/bash', '-c', 'true'],
+    {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      timeout: 5000,
+      maxBuffer: 1024 * 1024,
+    },
+  );
+  const stderr = String(probe.stderr ?? '');
+  sandboxExecUsableCache =
+    probe.status === 0 && !/sandbox_apply:\s*Operation not permitted/i.test(stderr);
+  return sandboxExecUsableCache;
 }
 
 function sandboxPath(value: string): string {
@@ -386,18 +411,32 @@ function hostSandboxWriteRoot(): string | null {
 }
 
 /** Path to a running out-of-sandbox broker socket, or null if none is configured/live. */
-function brokerSocketPath(): string | null {
-  const endpoint = process.env.ATOMIC_EXEC_BROKER_SOCKET?.trim();
-  if (!endpoint) return null;
-  if (endpoint.startsWith('file://')) {
-    const dir = endpoint.slice('file://'.length);
-    return fs.existsSync(path.join(dir, 'requests')) && fs.existsSync(path.join(dir, 'responses')) ? endpoint : null;
+function brokerEndpointIfPresent(endpoint: string): string | null {
+  const trimmed = endpoint.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('file://')) {
+    const dir = trimmed.slice('file://'.length);
+    return fs.existsSync(path.join(dir, 'requests')) && fs.existsSync(path.join(dir, 'responses')) ? trimmed : null;
   }
   try {
-    return fs.statSync(endpoint).isSocket() ? endpoint : null;
+    return fs.statSync(trimmed).isSocket() ? trimmed : null;
   } catch {
     return null;
   }
+}
+
+function brokerSocketPath(): string | null {
+  const envEndpoint = brokerEndpointIfPresent(process.env.ATOMIC_EXEC_BROKER_SOCKET ?? '');
+  if (envEndpoint) return envEndpoint;
+  const statePath = path.join(REPO_ROOT, '.atomic', 'codex-broker-current.json');
+  try {
+    const state = JSON.parse(fs.readFileSync(statePath, 'utf8')) as { socket?: unknown };
+    const stateEndpoint = typeof state.socket === 'string' ? brokerEndpointIfPresent(state.socket) : null;
+    if (stateEndpoint) return stateEndpoint;
+  } catch {
+    // Broker state is optional outside host-admitted Codex sessions.
+  }
+  return null;
 }
 
 /**
@@ -592,6 +631,166 @@ function byteLength(s: string): number {
 function capText(s: string, max = EXEC_OUTPUT_RETURN_LIMIT): { text: string; truncated: boolean } {
   if (s.length <= max) return { text: s, truncated: false };
   return { text: s.slice(0, max) + `\n...[truncated ${s.length - max} chars]`, truncated: true };
+}
+
+interface ExecOutputSummary {
+  readonly kind: 'tap-green' | 'tap-red';
+  readonly returnedStdoutBytes: number;
+  readonly fullStdoutBytes: number;
+  readonly fullStdoutSha256: string;
+  readonly fullStdoutLines: number;
+  readonly tests: number | null;
+  readonly pass: number | null;
+  readonly fail: number | null;
+  readonly durationMs: number | null;
+  readonly failureLines?: readonly string[];
+}
+
+function tapNumber(stdout: string, field: string): number | null {
+  const match = stdout.match(new RegExp(`^# ${field}\\s+(\\d+(?:\\.\\d+)?)$`, 'm'));
+  if (!match) return null;
+  const value = Number(match[1]);
+  return Number.isFinite(value) ? value : null;
+}
+
+function isLikelyTestCommand(command: string): boolean {
+  const c = command.trim();
+  return (
+    /\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test\b/.test(c) ||
+    /\bnode\b[\s\S]*\s--test(?:\s|$)/.test(c) ||
+    /\bvitest\b/.test(c)
+  );
+}
+
+const TAP_FAILURE_LINE_LIMIT = 80;
+const TAP_FAILURE_LINE_CHAR_LIMIT = 280;
+
+function capFailureLine(line: string): string {
+  if (line.length <= TAP_FAILURE_LINE_CHAR_LIMIT) return line;
+  const omitted = line.length - TAP_FAILURE_LINE_CHAR_LIMIT;
+  return `${line.slice(0, TAP_FAILURE_LINE_CHAR_LIMIT)}...[truncated ${omitted} chars]`;
+}
+
+function compactFailingTapLines(stdoutFull: string, stderrFull: string): string[] {
+  const lines = `${stdoutFull}\n${stderrFull}`.split(/\r?\n/);
+  const picked: string[] = [];
+  let suppressed = 0;
+  let includeDiagnosticLines = 0;
+  let lastSubtest: string | null = null;
+
+  const remember = (line: string) => {
+    if (picked.length < TAP_FAILURE_LINE_LIMIT) {
+      picked.push(capFailureLine(line.trimEnd()));
+      return;
+    }
+    suppressed += 1;
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (/^# Subtest:/.test(trimmed)) {
+      lastSubtest = line;
+      continue;
+    }
+
+    if (/^not ok\b/.test(trimmed)) {
+      if (lastSubtest) remember(lastSubtest);
+      remember(line);
+      lastSubtest = null;
+      includeDiagnosticLines = 14;
+      continue;
+    }
+
+    if (
+      includeDiagnosticLines > 0 &&
+      (/^\s+(?:---|\.\.\.|location:|failureType:|error:|code:|name:|expected:|actual:|operator:|stack:)(?:\s|$)/.test(
+        line,
+      ) ||
+        /^\s+at\b/.test(line))
+    ) {
+      remember(line);
+      includeDiagnosticLines -= 1;
+      continue;
+    }
+
+    if (/^#\s*(?:fail|failure|error|not ok)\b/i.test(trimmed)) {
+      remember(line);
+      continue;
+    }
+
+    if (/\b(?:AssertionError|Error:|ERR_|expected:|actual:|operator:|location:)\b/.test(line)) {
+      remember(line);
+    }
+  }
+
+  if (suppressed > 0) {
+    picked.push(`[atomic_exec:test-summary] ${suppressed} additional failure line(s) suppressed`);
+  }
+  return picked;
+}
+
+function summarizeTestOutput(
+  command: string,
+  exitCode: number | null,
+  stdoutFull: string,
+  stderrFull: string,
+): { stdout: string; stderr: string; summary: ExecOutputSummary | null } {
+  if (!isLikelyTestCommand(command) || !stdoutFull.includes('TAP version 13')) {
+    return { stdout: stdoutFull, stderr: stderrFull, summary: null };
+  }
+
+  const fail = tapNumber(stdoutFull, 'fail');
+  const tests = tapNumber(stdoutFull, 'tests');
+  const pass = tapNumber(stdoutFull, 'pass');
+  const durationMs = tapNumber(stdoutFull, 'duration_ms');
+  const fullStdoutLines = stdoutFull.split(/\r?\n/).length;
+  const tapFooter = stdoutFull
+    .split(/\r?\n/)
+    .filter((line) => /^# (?:tests|suites|pass|fail|cancelled|skipped|todo|duration_ms)\b/.test(line))
+    .slice(-10);
+  const kind: ExecOutputSummary['kind'] = exitCode === 0 && (fail === null || fail === 0) ? 'tap-green' : 'tap-red';
+  const failureLines = kind === 'tap-red' ? compactFailingTapLines(stdoutFull, stderrFull) : [];
+  const summaryLines = [
+    kind === 'tap-green'
+      ? '[atomic_exec:test-summary] TAP test command exited 0; returning compact stdout.'
+      : `[atomic_exec:test-summary] TAP test command exited non-zero; returning compact failure stdout. exit=${
+          exitCode ?? 'unknown'
+        }`,
+    `tests=${tests ?? 'unknown'} pass=${pass ?? 'unknown'} fail=${fail ?? 'unknown'} duration_ms=${
+      durationMs ?? 'unknown'
+    }`,
+    ...tapFooter,
+  ];
+  if (kind === 'tap-red') {
+    summaryLines.push('[atomic_exec:test-summary] failing TAP excerpts:');
+    summaryLines.push(
+      ...(failureLines.length > 0
+        ? failureLines
+        : ['[atomic_exec:test-summary] no compact failure excerpt found; full output remains available by receipt hash']),
+    );
+  }
+  summaryLines.push(
+    `[atomic_exec:test-summary] full_stdout_sha256=${digestText(stdoutFull)} full_stdout_bytes=${byteLength(
+      stdoutFull,
+    )} full_stdout_lines=${fullStdoutLines}`,
+  );
+  const stdout = summaryLines.join('\n') + '\n';
+  return {
+    stdout,
+    stderr: stderrFull,
+    summary: {
+      kind,
+      returnedStdoutBytes: byteLength(stdout),
+      fullStdoutBytes: byteLength(stdoutFull),
+      fullStdoutSha256: digestText(stdoutFull),
+      fullStdoutLines,
+      tests,
+      pass,
+      fail,
+      durationMs,
+      failureLines: kind === 'tap-red' ? failureLines : undefined,
+    },
+  };
 }
 
 function resolveCwd(input?: string): string {
@@ -859,11 +1058,13 @@ export function registerToolsExec(server: McpServer): void {
           });
           return fail(`atomic_exec refused (broker required): ${reason}`);
         }
-        const sandboxActive = hostSandbox ? Boolean(brokerSock) : sandboxExecAvailable();
+        const directSandboxActive = sandboxExecUsable();
+        const useBroker = hostSandbox || (!directSandboxActive && Boolean(brokerSock));
+        const sandboxActive = useBroker ? Boolean(brokerSock) : directSandboxActive;
         if (!sandboxActive) {
           const reason =
             'atomic_exec requires a real process sandbox under Y admission; ' +
-            `${SANDBOX_EXEC} is not available on this host.`;
+            `${SANDBOX_EXEC} is unavailable or sandbox_apply is denied in this process, and no live broker endpoint was recovered.`;
           appendTrace({
             ts: startedAt,
             kind: 'refused',
@@ -876,13 +1077,13 @@ export function registerToolsExec(server: McpServer): void {
         }
         const sandboxWriteRoot = effectRoot;
         const sandboxTempRoot = sandboxWriteRoot ? createSandboxTempRoot() : null;
-        const sandbox = hostSandbox
+        const sandbox = useBroker
           ? brokerSandboxReceipt(sandboxWriteRoot, sandboxTempRoot)
           : sandboxReceipt(true, sandboxWriteRoot, sandboxTempRoot);
         const sandboxEnv = sandboxTempEnv(sandboxTempRoot);
         let res: SpawnLikeResult;
         try {
-          res = hostSandbox
+          res = useBroker
             ? runViaBroker(
                 a.command,
                 cwd,
@@ -936,8 +1137,9 @@ export function registerToolsExec(server: McpServer): void {
         };
         const stdoutFull = redactAll(res.stdout ?? '');
         const stderrFull = redactAll(res.stderr ?? '');
-        const stdout = capText(stdoutFull);
-        const stderr = capText(stderrFull);
+        const outputSummary = summarizeTestOutput(a.command, exitCode, stdoutFull, stderrFull);
+        const stdout = capText(outputSummary.stdout);
+        const stderr = capText(outputSummary.stderr);
         const stdoutSha256 = digestText(stdoutFull);
         const stderrSha256 = digestText(stderrFull);
 
@@ -1015,6 +1217,7 @@ export function registerToolsExec(server: McpServer): void {
             stderrBytes: byteLength(stderrFull),
             stderrSha256,
             stderrTruncated: stderr.truncated,
+            stdoutSummary: outputSummary.summary,
           },
         });
 
@@ -1037,6 +1240,7 @@ export function registerToolsExec(server: McpServer): void {
           stderrSha256,
           stderrTruncated: stderr.truncated,
           outputReturnLimit: EXEC_OUTPUT_RETURN_LIMIT,
+          stdoutSummary: outputSummary.summary,
           snapshot: snap,
           rolledBack,
           rollbackScope,

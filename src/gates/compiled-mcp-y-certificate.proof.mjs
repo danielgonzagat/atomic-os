@@ -290,14 +290,25 @@ function finish(payload) {
 }
 
 async function main() {
-  const build = runBuild();
-  const buildGreen = build.status === 0;
-  if (!buildGreen) {
-    return { ok: false, build, assertion: { buildGreen } };
+  let freshness = runProof('dist-freshness.proof.mjs');
+  let distFreshnessGreen = freshness.status === 0 && freshness.parsed?.ok === true;
+  let build = {
+    status: 0,
+    stdout: '',
+    stderr: '',
+    skipped: true,
+    reason: 'dist already fresh before compiled certificate proof',
+  };
+  let buildGreen = true;
+  if (!distFreshnessGreen) {
+    build = runBuild();
+    buildGreen = build.status === 0;
+    if (!buildGreen) {
+      return { ok: false, build, freshness, assertion: { buildGreen, distFreshnessGreen } };
+    }
+    freshness = runProof('dist-freshness.proof.mjs');
+    distFreshnessGreen = freshness.status === 0 && freshness.parsed?.ok === true;
   }
-
-  const freshness = runProof('dist-freshness.proof.mjs');
-  const distFreshnessGreen = freshness.status === 0 && freshness.parsed?.ok === true;
   if (!distFreshnessGreen) {
     return { ok: false, build, freshness, assertion: { buildGreen, distFreshnessGreen } };
   }

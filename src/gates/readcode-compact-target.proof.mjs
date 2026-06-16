@@ -36,6 +36,7 @@ function parseToolResult(result) {
 
 function sourceAssertions() {
   const readcode = read('scripts/mcp/atomic-edit/server-tools-readcode.ts');
+  const browseTools = read('scripts/mcp/atomic-edit/server-tools-b.ts');
   return {
     readcodeUsesCompactLocalTarget:
       readcode.includes('function readcodeTargetDetails(displayPath: string): Record<string, unknown>') &&
@@ -44,18 +45,62 @@ function sourceAssertions() {
     readcodeNoLongTargetHelper:
       !readcode.includes("import { readUtf8, targetDetails, sha256 }") &&
       !readcode.includes('...targetDetails(absPath, displayPath),'),
-    readcodeDefaultFullLimitIsThreeK:
-      readcode.includes('const SMALL_FILE_LIMIT = 3000') &&
-      readcode.includes('small (<3K chars by default)') &&
-      readcode.includes('Defaults to the normal 3K readCode threshold'),
+    readcodeDefaultFullLimitIsSixK:
+      readcode.includes('const CONTEXT_FILE_LIMIT = 6000') &&
+      readcode.includes('small (<6K chars by default)') &&
+      readcode.includes('Defaults to the normal 6K readCode threshold'),
+    readcodeWildcardSelectorsFallBackToFileContext:
+      readcode.includes("a.selector?.trim() === '*'") &&
+      readcode.includes("item.selector?.trim() === '*'") &&
+      readcode.includes('selectorWildcard'),
     readcodeSingleToolHasExplicitOverride:
       readcode.includes('maxFullChars: z') &&
-      readcode.includes("const fullLimit = typeof a.maxFullChars === 'number' ? a.maxFullChars : SMALL_FILE_LIMIT") &&
+      readcode.includes("const fullLimit = typeof a.maxFullChars === 'number' ? a.maxFullChars : CONTEXT_FILE_LIMIT") &&
       readcode.includes('if (text.length < fullLimit)') &&
       readcode.includes('fullContentThreshold: fullLimit'),
     readcodeBatchKeepsExplicitOverride:
       readcode.includes('maxFullCharsPerFile') &&
-      readcode.includes("const fullLimit = typeof a.maxFullCharsPerFile === 'number' ? a.maxFullCharsPerFile : SMALL_FILE_LIMIT"),
+      readcode.includes("const hasExplicitFullLimit = typeof a.maxFullCharsPerFile === 'number'") &&
+      readcode.includes('const fullLimit = hasExplicitFullLimit ? a.maxFullCharsPerFile! : CONTEXT_FILE_LIMIT'),
+    readcodeBatchHasAggregateBudget:
+      readcode.includes('const BATCH_CONTEXT_BUDGET = 32000') &&
+      readcode.includes('const BATCH_COMPACT_ITEM_THRESHOLD = 5') &&
+      readcode.includes('projectedFullChars > BATCH_CONTEXT_BUDGET'),
+    readcodeBatchReportsCompactionAndNextReads:
+      readcode.includes('batchContextCompacted') &&
+      readcode.includes('batchProjectedFullChars') &&
+      readcode.includes('fullReadNext') &&
+      readcode.includes('Batch aggregate context was compacted'),
+    readcodeDirectoryBatchNextUsesShallowTree:
+      readcode.includes('function collectShallowTreeFiles') &&
+      readcode.includes('readcodeBatchNextForDirectory(dir, entries, shallowTree)') &&
+      readcode.includes('Directory exposes a small file cluster in its shallow tree'),
+    readcodeDirectoryInlinesSmallFiles:
+      readcode.includes('DIRECTORY_INLINE_CONTEXT_BUDGET = 14000') &&
+      readcode.includes('DIRECTORY_INLINE_FILE_LIMIT = 6') &&
+      readcode.includes('function readcodeInlineFilesForDirectory') &&
+      readcode.includes('inlineFiles') &&
+      readcode.includes('Inline small files:'),
+    readcodeCompactedBatchPayloadIsMinimal:
+      readcode.includes('const BATCH_COMPACT_SYMBOL_LIMIT = 8') &&
+      readcode.includes('symbolSelectors') &&
+      readcode.includes("tool: 'code_readcode_batch'") &&
+      readcode.includes('maxFullCharsPerFile: fullLimit') &&
+      readcode.includes('fullReadNext,') &&
+      !readcode.includes("tool: 'code_readcode',\n                  arguments: { path: displayPath"),
+    readcodeFullPayloadAvoidsDuplicatedSymbols:
+      readcode.includes('symbolSelectors: o.symbols.map((symbol) => symbol.selector)') &&
+      !readcode.includes('content: text,\n            fileSha256: fileSha,\n            symbols: o.symbols') &&
+      !readcode.includes('content: text,\n                fileSha256: fileSha,\n                symbols: o.symbols') &&
+      !readcode.includes('content: text,\n                  fileSha256: fileSha,\n                  symbols: o.symbols'),
+    codeBrowseAdvertisesBatchNext:
+      browseTools.includes('function browseBatchNextForDirectory') &&
+      browseTools.includes("tool: 'code_readcode_batch'") &&
+      browseTools.includes('call code_readcode_batch from batchNext') &&
+      browseTools.includes('batchNext,') &&
+      browseTools.includes('browseWorkspaceDisplayPath') &&
+      browseTools.includes("root: 'active-workspace'") &&
+      browseTools.includes('browseDirectoryTree(dir, absPath)'),
   };
 }
 
@@ -107,10 +152,26 @@ async function dynamicReadcodeProof() {
     'export const medium = ' + JSON.stringify('x'.repeat(3600)) + ';\n',
   );
   fs.writeFileSync(path.join(workspace, 'package.json'), '{"type":"module"}\n');
+  fs.mkdirSync(path.join(workspace, 'src', 'cluster'), { recursive: true });
+  fs.writeFileSync(path.join(workspace, 'src', 'cluster', 'alpha.ts'), 'export const alpha = 1;\n');
+  fs.writeFileSync(path.join(workspace, 'src', 'cluster', 'beta.ts'), 'export function beta(): number {\n  return 2;\n}\n');
+  for (let i = 0; i < 10; i += 1) {
+    fs.writeFileSync(
+      path.join(workspace, 'src', `chunk-${i}.ts`),
+      [
+        `export function chunk${i}(): string {`,
+        '  return ' + JSON.stringify('x'.repeat(3600)) + ';',
+        '}',
+        '',
+      ].join('\n'),
+    );
+  }
 
   try {
     return await withClient(proofRoot, workspace, async (client) => {
       const dir = parseToolResult(await client.callTool({ name: 'code_readcode', arguments: { path: 'src' } }, undefined, { timeout: 30000 }));
+      const inlineDir = parseToolResult(await client.callTool({ name: 'code_readcode', arguments: { path: 'src/cluster' } }, undefined, { timeout: 30000 }));
+      const browseDir = parseToolResult(await client.callTool({ name: 'code_browse', arguments: { dir: 'src' } }, undefined, { timeout: 30000 }));
       const file = parseToolResult(await client.callTool({ name: 'code_readcode', arguments: { path: 'src/example.ts' } }, undefined, { timeout: 30000 }));
       const mediumDefault = parseToolResult(await client.callTool({ name: 'code_readcode', arguments: { path: 'src/medium.ts' } }, undefined, { timeout: 30000 }));
       const mediumOverride = parseToolResult(await client.callTool({ name: 'code_readcode', arguments: { path: 'src/medium.ts', maxFullChars: 5000 } }, undefined, { timeout: 30000 }));
@@ -122,32 +183,95 @@ async function dynamicReadcodeProof() {
         name: 'code_read_symbols_batch',
         arguments: { items: [{ path: 'src/example.ts', selector: 'alpha' }] },
       }, undefined, { timeout: 30000 }));
-      const bodies = { dir, file, mediumDefault, mediumOverride, batch, symbols };
+      const compactItems = Array.from({ length: 10 }, (_, i) => ({ path: `src/chunk-${i}.ts` }));
+      const compactBatch = parseToolResult(await client.callTool({
+        name: 'code_readcode_batch',
+        arguments: { items: compactItems },
+      }, undefined, { timeout: 30000 }));
+      const explicitBatch = parseToolResult(await client.callTool({
+        name: 'code_readcode_batch',
+        arguments: { items: compactItems, maxFullCharsPerFile: 5000 },
+      }, undefined, { timeout: 30000 }));
+      const compactEntries = compactBatch.results ?? [];
+      const explicitEntries = explicitBatch.results ?? [];
+      const dirBatchNextPaths = (dir.batchNext?.items ?? []).map((item) => item.path);
+      const browseBatchNextPaths = (browseDir.batchNext?.items ?? []).map((item) => item.path);
+      const bodies = { dir, inlineDir, browseDir, file, mediumDefault, mediumOverride, batch, symbols, compactBatch, explicitBatch };
       const noLeaks = Object.values(bodies).every((body) => !containsAbsoluteLeak(body, proofRoot, workspace));
       return {
         ok:
           dir.ok === true &&
           dir.target?.file === 'src' &&
           dir.target?.root === 'active-workspace' &&
+          dir.batchNext?.tool === 'code_readcode_batch' &&
+          dirBatchNextPaths.includes('src/chunk-0.ts') &&
+          dirBatchNextPaths.includes('src/example.ts') &&
+          dirBatchNextPaths.length >= 8 &&
+          inlineDir.ok === true &&
+          inlineDir.mode === 'directory' &&
+          inlineDir.inlineFileCount === 2 &&
+          inlineDir.inlineContextBudget === 14000 &&
+          Array.isArray(inlineDir.inlineFiles) &&
+          inlineDir.inlineFiles.length === 2 &&
+          inlineDir.inlineFiles.every((entry) => entry.mode === 'full' && entry.target?.root === 'active-workspace' && typeof entry.content === 'string' && Array.isArray(entry.symbolSelectors)) &&
+          inlineDir.inlineFiles.some((entry) => entry.file === 'src/cluster/alpha.ts' && entry.content.includes('alpha = 1')) &&
+          inlineDir.inlineFiles.some((entry) => entry.file === 'src/cluster/beta.ts' && entry.content.includes('function beta')) &&
+          browseDir.ok === true &&
+          browseDir.target?.root === 'active-workspace' &&
+          browseDir.target?.file === 'src' &&
+          browseDir.batchNext?.tool === 'code_readcode_batch' &&
+          browseBatchNextPaths.includes('src/chunk-0.ts') &&
+          browseBatchNextPaths.includes('src/example.ts') &&
+          browseBatchNextPaths.length >= 8 &&
           file.ok === true &&
           file.target?.file === 'src/example.ts' &&
           file.target?.root === 'active-workspace' &&
           file.mode === 'full' &&
-          file.fullContentThreshold === 3000 &&
+          file.fullContentThreshold === 6000 &&
+          typeof file.content === 'string' &&
+          Array.isArray(file.symbolSelectors) &&
+          typeof file.symbols === 'undefined' &&
           mediumDefault.ok === true &&
-          mediumDefault.mode === 'summary' &&
-          mediumDefault.fullContentThreshold === 3000 &&
-          mediumDefault.content === undefined &&
+          mediumDefault.mode === 'full' &&
+          mediumDefault.fullContentThreshold === 6000 &&
+          typeof mediumDefault.content === 'string' &&
+          Array.isArray(mediumDefault.symbolSelectors) &&
+          typeof mediumDefault.symbols === 'undefined' &&
           mediumOverride.ok === true &&
           mediumOverride.mode === 'full' &&
           mediumOverride.fullContentThreshold === 5000 &&
           typeof mediumOverride.content === 'string' &&
+          Array.isArray(mediumOverride.symbolSelectors) &&
+          typeof mediumOverride.symbols === 'undefined' &&
           batch.ok === true &&
           batch.results?.every((entry) => entry.target?.root === 'active-workspace') &&
           symbols.ok === true &&
           symbols.results?.every((entry) => entry.target?.file === 'src/example.ts') &&
+          compactBatch.ok === true &&
+          compactBatch.batchContextCompacted === true &&
+          compactBatch.batchProjectedFullChars > compactBatch.batchContextBudget &&
+          compactEntries.length === 10 &&
+          compactEntries.every(
+            (entry) =>
+              entry.mode === 'summary' &&
+              entry.batchContextCompacted === true &&
+              typeof entry.content === 'undefined' &&
+              typeof entry.symbols === 'undefined' &&
+              Array.isArray(entry.symbolSelectors) &&
+              entry.symbolSelectors.length <= 8 &&
+              typeof entry.fullReadNext === 'undefined',
+          ) &&
+          compactBatch.fullReadNext?.tool === 'code_readcode_batch' &&
+          compactBatch.fullReadNext?.arguments?.maxFullCharsPerFile === 6000 &&
+          compactBatch.fullReadNext?.arguments?.items?.length === 10 &&
+          explicitBatch.ok === true &&
+          explicitBatch.batchContextCompacted === false &&
+          explicitEntries.length === 10 &&
+          explicitEntries.every((entry) => entry.mode === 'full' && typeof entry.content === 'string') &&
           noLeaks,
         bodies,
+        dirBatchNextPaths,
+        browseBatchNextPaths,
         noLeaks,
       };
     });

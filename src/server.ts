@@ -72,11 +72,13 @@ type RegisteredToolForList = {
 };
 
 const EMPTY_OBJECT_JSON_SCHEMA: Tool['inputSchema'] = { type: 'object', properties: {} };
+const MCP_TOOL_DESCRIPTION_CHAR_LIMIT = 140;
 
 const CODEX_UNSUPPORTED_SCHEMA_KEYS = new Set([
   '$schema',
   '$defs',
   'definitions',
+  'description',
   'default',
   'format',
   'not',
@@ -97,6 +99,16 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function isToolRegistry(value: unknown): value is Record<string, RegisteredToolForList> {
   return isPlainObject(value);
+}
+
+function compactToolDescription(description: string | undefined): string | undefined {
+  if (!description) return undefined;
+  const normalized = description.replace(/\s+/g, ' ').trim();
+  if (!normalized) return undefined;
+  const firstSentence = normalized.match(/^[^.!?]+[.!?]?/)?.[0]?.trim() ?? normalized;
+  const candidate = firstSentence.length >= 24 ? firstSentence : normalized;
+  if (candidate.length <= MCP_TOOL_DESCRIPTION_CHAR_LIMIT) return candidate;
+  return `${candidate.slice(0, MCP_TOOL_DESCRIPTION_CHAR_LIMIT - 3).trimEnd()}...`;
 }
 
 function sanitizeJsonSchema(value: unknown): unknown {
@@ -144,7 +156,7 @@ function installCodexSafeToolList(serverInstance: McpServer): void {
         const toolDefinition: Tool = {
           name,
           title: tool.title,
-          description: tool.description,
+          description: compactToolDescription(tool.description),
           inputSchema: toCodexObjectSchema(tool.inputSchema, 'input'),
         };
 
