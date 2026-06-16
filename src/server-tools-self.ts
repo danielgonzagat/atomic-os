@@ -157,6 +157,14 @@ function brokerEndpointPath(endpoint: string): string | null {
   if (value.startsWith('file://')) {
     try {
       const dir = fileURLToPath(value);
+      const marker = JSON.parse(fs.readFileSync(path.join(dir, 'broker.json'), 'utf8')) as { protocol?: unknown; pid?: unknown };
+      if (marker.protocol !== 'atomic-file-broker-v1' || typeof marker.pid !== 'number' || !Number.isInteger(marker.pid) || marker.pid <= 1) return null;
+      try {
+        process.kill(marker.pid, 0);
+      } catch (error) {
+        const code = typeof error === 'object' && error && 'code' in error ? (error as { code?: unknown }).code : undefined;
+        if (code !== 'EPERM') return null;
+      }
       return fs.existsSync(path.join(dir, 'requests')) && fs.existsSync(path.join(dir, 'responses')) ? value : null;
     } catch {
       return null;

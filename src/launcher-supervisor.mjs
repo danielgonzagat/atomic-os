@@ -348,7 +348,14 @@ function brokerAlive(endpoint) {
   try {
     if (!endpoint) return false;
     if (endpoint.startsWith('file://')) {
-      const dir = endpoint.slice('file://'.length);
+      const dir = fileURLToPath(endpoint);
+      const marker = JSON.parse(fs.readFileSync(path.join(dir, 'broker.json'), 'utf8'));
+      if (marker?.protocol !== 'atomic-file-broker-v1' || !Number.isInteger(marker?.pid) || marker.pid <= 1) return false;
+      try {
+        process.kill(marker.pid, 0);
+      } catch (error) {
+        if (error?.code !== 'EPERM') return false;
+      }
       return fs.existsSync(path.join(dir, 'requests')) && fs.existsSync(path.join(dir, 'responses'));
     }
     if (!fs.statSync(endpoint).isSocket()) return false;
@@ -380,17 +387,21 @@ function lkgEnv() {
     env.ATOMIC_HOST_WRITE_ROOT = REPO_ROOT;
     env.ATOMIC_EDIT_MCP_SELF_HOSTED = '1';
     env.ATOMIC_EDIT_ALLOW_SELF_HOSTED = '1';
-    if (!env.ATOMIC_EXEC_BROKER_SOCKET) {
+    if (!brokerAlive(env.ATOMIC_EXEC_BROKER_SOCKET || '')) {
       try {
         const brokerDir = path.join(REPO_ROOT, '.atomic', `supervisor-lkg-broker-${process.pid}`);
-        fs.mkdirSync(path.join(brokerDir, 'requests'), { recursive: true });
-        fs.mkdirSync(path.join(brokerDir, 'responses'), { recursive: true });
+        fs.rmSync(brokerDir, { recursive: true, force: true });
+        fs.mkdirSync(brokerDir, { recursive: true });
         env.ATOMIC_EXEC_BROKER_SOCKET = `file://${brokerDir}`;
         lkgBrokerChild = spawn(process.execPath, [path.join(SRC_DIR, 'atomic-exec-broker.mjs'), '--no-sandbox', env.ATOMIC_EXEC_BROKER_SOCKET], {
           stdio: ['ignore', 'ignore', 'pipe'], env,
         });
         lkgBrokerChild.stderr?.on('data', pushStderr);
         lkgBrokerChild.on('error', () => { /* degraded: exec tools limited */ });
+        const waitCell = new Int32Array(new SharedArrayBuffer(4));
+        const deadline = Date.now() + 5000;
+        while (!brokerAlive(env.ATOMIC_EXEC_BROKER_SOCKET) && Date.now() < deadline) Atomics.wait(waitCell, 0, 0, 25);
+        if (!brokerAlive(env.ATOMIC_EXEC_BROKER_SOCKET)) env.ATOMIC_EXEC_BROKER_SOCKET = '';
       } catch { /* degraded: exec tools limited */ }
     }
   }
@@ -498,7 +509,12 @@ function onChildExit(proc, code, signal) {
   // availability failure, not a malformed envelope — recover degraded
   // instead of dying (the empty-socket refusal contract stays intact).
   if (!firstSpawnDone && !initAnswered && typeof code === 'number' && REFUSAL_EXITS.has(code)) {
-    const staleBroker80 = code === 80 && !/requires ATOMIC_EXEC_BROKER_SOCKET/.test(stderrRing.join(''));
+    const missingBrokerSocket80 =
+      code === 80 &&
+      process.env.ATOMIC_HOST_SANDBOX === 'macos-sandbox-exec' &&
+      process.env.ATOMIC_HOST_ATOMIC_ONLY === '1' &&
+      !process.env.ATOMIC_EXEC_BROKER_SOCKET;
+    const staleBroker80 = code === 80 && !missingBrokerSocket80 && !/requires ATOMIC_EXEC_BROKER_SOCKET/.test(stderrRing.join(''));
     if (!staleBroker80) {
       gracefulExit(code, `impl refused with designed exit ${code}`);
       return;
@@ -523,7 +539,7 @@ function onChildExit(proc, code, signal) {
 
   // crashes after a successful run restart the ladder from the top; failures
   // during recovery walk down the ladder.
-  let stage2 = initAnswered && stage !== 'lkg' && !firstFailureBurst() ? 'impl' : nextLadderStage(stage);
+  const stage2 = initAnswered && stage !== 'lkg' && !firstFailureBurst() ? 'impl' : nextLadderStage(stage);
   if (stage2 === 'rescue') { enterRescue('recovery ladder exhausted'); return; }
   let next = spawnStage(stage2);
   if (!next) {

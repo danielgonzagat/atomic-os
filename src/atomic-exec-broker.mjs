@@ -421,6 +421,13 @@ function startFileBroker(root) {
   const responses = path.join(root, 'responses');
   fs.mkdirSync(requests, { recursive: true, mode: 0o700 });
   fs.mkdirSync(responses, { recursive: true, mode: 0o700 });
+  writeJsonAtomic(path.join(root, 'broker.json'), {
+    protocol: 'atomic-file-broker-v1',
+    pid: process.pid,
+    endpoint: 'file://' + root,
+    root,
+    startedAt: new Date().toISOString(),
+  });
   const inFlight = new Set();
   const processRequest = async (name) => {
     if (!name.endsWith('.json') || inFlight.has(name)) return;

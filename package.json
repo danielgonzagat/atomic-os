@@ -38,6 +38,7 @@
     "test": "node src/smoke.mjs",
     "verify": "node src/verify.mjs",
     "verify:integration": "node src/verify.mjs --integration",
+    "test:unit": "vitest run --config src/vitest.config.ts",
     "bench": "node src/bench.mjs",
     "cli": "node src/atomic-cli.mjs",
     "prepublishOnly": "node src/build.mjs"

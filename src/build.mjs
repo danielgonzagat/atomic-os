@@ -256,6 +256,25 @@ function ensureCompatLayout(srcDir) {
       process.stderr.write(`build: compat layout link skipped (${linkPath}): ${e instanceof Error ? e.message : String(e)}\n`);
     }
   }
+  // The MCP launcher scripts are siblings of atomic-edit/ in the canonical layout
+  // (scripts/mcp/atomic-edit-mcp-launcher.sh) but live inside src/ here; expose them
+  // at the canonical sibling path too, so gates that read them resolve on a clone.
+  try {
+    const mcpDir = path.join(repoRoot, 'scripts', 'mcp');
+    fs.mkdirSync(mcpDir, { recursive: true });
+    for (const name of fs.readdirSync(srcDir)) {
+      if (!/^atomic-edit-.*(launcher|wrapper).*\.(sh|mjs)$/.test(name)) continue;
+      const linkPath = path.join(mcpDir, name);
+      try {
+        const st = fs.lstatSync(linkPath);
+        if (st.isSymbolicLink() || st.isFile()) fs.unlinkSync(linkPath);
+        else if (st.isDirectory()) fs.rmSync(linkPath, { recursive: true, force: true });
+      } catch { /* none */ }
+      fs.symlinkSync(path.resolve(path.join(srcDir, name)), linkPath, linkType === 'junction' ? 'file' : undefined);
+    }
+  } catch (e) {
+    process.stderr.write(`build: launcher compat links skipped: ${e instanceof Error ? e.message : String(e)}\n`);
+  }
 }
 
 // Compile into a private staging dir first. The live dist directory is an
