@@ -228,10 +228,41 @@ const options = {
   sourceMap: false,
 };
 
+// Materialize the standalone compat layout so the proof gates — which address
+// source by the canonical monorepo paths `scripts/mcp/atomic-edit/...` and
+// `atomic-edit-evolution/...` — resolve from a flat clone with NO committed
+// symlink. Created here at build time via Node fs, fully portable: a directory
+// symlink on posix, an NTFS junction on Windows (no admin, no git core.symlinks
+// dependency). Idempotent and safe: only ever unlinks a symlink or removes a
+// stale generated dir at the link path, never the real source/evolution dirs.
+function ensureCompatLayout(srcDir) {
+  const repoRoot = path.resolve(srcDir, '..');
+  const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+  const links = [
+    [path.join(repoRoot, 'scripts', 'mcp', 'atomic-edit'), srcDir],
+    [path.join(repoRoot, 'atomic-edit-evolution'), path.join(repoRoot, 'evolution')],
+  ];
+  for (const [linkPath, target] of links) {
+    try {
+      if (!fs.existsSync(target)) continue;
+      try {
+        const st = fs.lstatSync(linkPath);
+        if (st.isSymbolicLink() || st.isFile()) fs.unlinkSync(linkPath);
+        else if (st.isDirectory()) fs.rmSync(linkPath, { recursive: true, force: true });
+      } catch { /* nothing at linkPath yet */ }
+      fs.mkdirSync(path.dirname(linkPath), { recursive: true });
+      fs.symlinkSync(path.resolve(target), linkPath, linkType);
+    } catch (e) {
+      process.stderr.write(`build: compat layout link skipped (${linkPath}): ${e instanceof Error ? e.message : String(e)}\n`);
+    }
+  }
+}
+
 // Compile into a private staging dir first. The live dist directory is an
 // agent runtime surface: deleting it before emit creates a window where a
 // concurrent MCP process can load server.js without its imported helpers.
 function main() {
+  ensureCompatLayout(dir);
   fs.rmSync(BUILD_OUT, { recursive: true, force: true });
   fs.mkdirSync(BUILD_OUT, { recursive: true });
 

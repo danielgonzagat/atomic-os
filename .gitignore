@@ -13,3 +13,8 @@ atomic-edit.protected.json
 # vendored native engine binaries (use the @oh-my-pi/pi-natives npm dep instead)
 src/vendor/pi-natives/*.node
 vendor/pi-natives/*.node
+
+# build-generated portable compat layout (build.mjs recreates these every build:
+# a dir symlink on posix, an NTFS junction on Windows — no git core.symlinks needed)
+/scripts/
+/atomic-edit-evolution
