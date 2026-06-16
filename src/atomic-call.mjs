@@ -39,7 +39,7 @@ if (process.argv[3]) {
 
 const request = JSON.stringify({
   jsonrpc: '2.0',
-  id: 1,
+  id: Math.floor(Math.random() * 1000000),
   method: 'tools/call',
   params: { name: tool, arguments: args },
 });

@@ -43,7 +43,9 @@ const EXT_LANG: Record<string, string> = {
   '.ts': 'typescript', '.tsx': 'tsx', '.js': 'javascript', '.jsx': 'javascript',
   '.mjs': 'javascript', '.cjs': 'javascript', '.py': 'python', '.go': 'go',
   '.rb': 'ruby', '.rs': 'rust', '.java': 'java', '.c': 'c', '.cc': 'cpp',
-  '.cpp': 'cpp', '.json': 'json',
+  '.cpp': 'cpp', '.json': 'json', '.sh': 'bash', '.bash': 'bash', '.zsh': 'bash',
+  '.css': 'css', '.html': 'html', '.sql': 'sql', '.yaml': 'yaml', '.yml': 'yaml',
+  '.toml': 'toml', '.proto': 'protobuf',
 };
 
 /** GATE 1 — syntax: every changed file parses (web-tree-sitter, language-agnostic). */

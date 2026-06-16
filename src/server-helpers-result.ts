@@ -5,6 +5,7 @@ import { buildTrace, levelFor, shapePayload, writeTrace } from './trace.js';
 import { atomicWrite, sha256, log, targetDetails } from './server-helpers-io.js';
 import { characterDiff, previewDiff } from './advanced.js';
 import { runPostEditVerify } from './server-helpers-verify.js';
+import { convergeStatic } from './server-helpers-converge.js';
 import { lockDir, autoLockCleanup, autoLockFile } from './server-helpers-product-locks.js';
 import {
   requireNegativeProofForRemovedBytes,
