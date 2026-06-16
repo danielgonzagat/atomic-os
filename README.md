@@ -9,7 +9,7 @@ requires a written proof.**
 [![tools](https://img.shields.io/badge/tools-114-E85D30)](#what-you-get--114-tools)
 [![languages](https://img.shields.io/badge/structural%20edit-multi--language%20WASM-blue)](#the-universal-engine-multi-language-pure-wasm)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![smoke](https://img.shields.io/badge/smoke-20%2F20-success)](#verify-it-yourself)
+[![smoke](https://img.shields.io/badge/smoke-47%2F47-success)](#verify-it-yourself)
 [![benchmark](https://img.shields.io/badge/AtomicBench-98%25%20bytes%20avoided%20vs%20line-E85D30)](docs/BENCHMARK.md)
 
 > This is the **complete** Atomic OS — the full engine we run in production,

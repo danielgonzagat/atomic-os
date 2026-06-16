@@ -491,3 +491,43 @@ function shutdown() {
 }
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
+
+// Parent-death reaper. This broker is ALWAYS spawned as a child of the host
+// launcher / supervisor that owns its lifetime (claude-/codex-atomic-host-launcher
+// and the launcher-supervisor LKG path) — never a standalone daemon. On a CLEAN
+// parent exit those owners SIGTERM us (handled above). But on an ABNORMAL parent
+// death (SIGKILL, crash, a timeout-killed gate run) no SIGTERM is delivered, and
+// because the broker reads no stdin nothing else signals us: we are reparented to
+// the init process (ppid 1) and would keep listening forever. That orphaning was
+// the dominant source of leaked atomic-exec brokers accumulating until the machine
+// ran out of RAM.
+//
+// NB: process.ppid is captured ONCE by Node and is NOT updated on reparent, so we
+// cannot watch it change. Instead record the owning parent's pid at startup and
+// poll its LIVENESS with signal 0: once that throws ESRCH (no such process) the
+// owner is gone and we have been orphaned — reap cleanly so the socket / file
+// endpoint is removed and the process exits. EPERM means the pid still exists
+// (owner alive, just not signalable) so we keep serving.
+const BROKER_PARENT_PID = process.ppid;
+if (BROKER_PARENT_PID > 1) {
+  const parentReaper = setInterval(() => {
+    let parentAlive = true;
+    try {
+      process.kill(BROKER_PARENT_PID, 0);
+    } catch (err) {
+      parentAlive = err && err.code === 'EPERM';
+    }
+    if (!parentAlive) {
+      try {
+        process.stderr.write(
+          '[atomic-exec-broker] owning parent ' + BROKER_PARENT_PID +
+            ' gone; reaping orphaned broker\n',
+        );
+      } catch {
+        /* best-effort */
+      }
+      shutdown();
+    }
+  }, 2000);
+  parentReaper.unref();
+}

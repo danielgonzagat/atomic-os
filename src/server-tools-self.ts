@@ -79,6 +79,7 @@ const MANDATORY_SELF_EXPANSION_VALIDATORS: readonly SelfExpansionValidator[] = [
   { phase: 'effect-scope', command: 'node gates/self-expansion-unexpected-effects.proof.mjs --json' },
   { phase: 'self-evolution-real', command: 'node gates/self-expansion-real-self-evolution.proof.mjs --json' },
   { phase: 'no-bypass', command: 'node codex-atomic-only-hook.proof.mjs --json' },
+  { phase: 'resource-lifetime', command: 'node gates/atomic-exec-broker-parent-reap.proof.mjs --json' },
 ];
 
 const SELF_EVOLUTION_ARCHIVE_REL = 'self-evolution-archive.jsonl';

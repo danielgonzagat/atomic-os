@@ -67,9 +67,15 @@ built-in `Edit` does not.
 
 - Cross-file rename needs a reachable `tsconfig.json` (falls back to a
   directory-scoped project otherwise).
-- Non-TS/JS/JSON: range/insert/delete work; validation is range-validity only.
-- Selectors resolve named declarations; arbitrary sub-expression selectors are
-  a future layer, not faked.
+- Non-TS/JS/JSON: edits are syntax-validated by a real host parser when one is
+  available — Python (`ast.parse`), Go (`gofmt`), Rust (`rustc`), Ruby, Shell
+  (`bash -n`), Java — otherwise by a delimiter/string-aware structural-balance
+  check (never a silent range-only pass; the result reports `language: "structural"`
+  when no real parser ran).
+- The named-declaration `selector` mechanism resolves function/class/method/
+  interface/type/var. Arbitrary sub-expressions are reachable via the ast-grep
+  bridge (`atomic_ast_search` / `atomic_ast_rewrite`) with meta-variable patterns
+  (e.g. `foo($A)` → `bar($A)`), byte-offset exact across the bundled grammars.
 
 ## Verify after touching the server
 
