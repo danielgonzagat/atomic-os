@@ -17,7 +17,7 @@ function check(name: string, condition: boolean, detail = ''): void {
 
 async function main(): Promise<void> {
   const sourceDir = process.cwd();
-  const repoRoot = path.resolve(sourceDir, '..', '..', '..');
+  const repoRoot = path.resolve(sourceDir, '..');
   const transport = new StdioClientTransport({
     command: 'npx',
     args: ['--yes', 'tsx', path.join(sourceDir, 'server.ts')],

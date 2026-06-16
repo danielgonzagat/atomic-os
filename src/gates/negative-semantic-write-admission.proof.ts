@@ -32,7 +32,7 @@ function parse(result: ToolResult): Record<string, unknown> {
 
 async function main(): Promise<void> {
   const sourceDir = process.cwd();
-  const repoRoot = path.resolve(sourceDir, '..', '..', '..');
+  const repoRoot = path.resolve(sourceDir, '..');
   const fixtureRel = path.join('scripts', 'mcp', '.negative-semantic-write-' + process.pid);
   const fixtureAbs = path.join(repoRoot, fixtureRel);
   fs.mkdirSync(fixtureAbs, { recursive: true });

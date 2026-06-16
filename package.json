@@ -36,6 +36,8 @@
     "start": "bash src/atomic-edit-mcp-launcher.sh",
     "smoke": "node src/smoke.mjs",
     "test": "node src/smoke.mjs",
+    "verify": "node src/verify.mjs",
+    "verify:integration": "node src/verify.mjs --integration",
     "bench": "node src/bench.mjs",
     "cli": "node src/atomic-cli.mjs",
     "prepublishOnly": "node src/build.mjs"

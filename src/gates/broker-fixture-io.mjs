@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const sourceDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const repoRoot = path.resolve(sourceDir, '..', '..', '..');
+const repoRoot = path.resolve(sourceDir, '..');
 
 function permissionDenied(error) {
   return Boolean(error && typeof error === 'object' && ['EPERM', 'EACCES', 'EROFS'].includes(error.code));

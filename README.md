@@ -272,24 +272,36 @@ The repo-containment boundary always applies. To pin the repo root explicitly
 
 ## Verify it yourself
 
+One command builds the engine, runs the live smoke round-trip, and runs the whole
+self-admission proof lattice:
+
 ```bash
-npm test
-#  PASS  server lists >= 60 tools (got 114)
-#  PASS  tool present: atomic_replace_at / atomic_ast_edit / atomic_rename_symbol_universal / ...
-#  PASS  atomic_replace_at applied              (a negative-byte edit, allowed via proofOfIncorrectness)
-#  PASS  edit persisted (greet->salute)
-#  PASS  path-escape refused                    (the firewall)
-#  PASS  atomic_session_begin returns a session id
-#  PASS  edit inside session applied (salute->hail)
-#  PASS  atomic_session_rollback restored the window (hail->salute)
-#  PASS  atomic_session_commit kept the edit (salute->hail)
-#  20 passed, 0 failed
+npm install
+npm run verify
+#  Building engine… OK
+#  Live smoke round-trip… 47 passed, 0 failed
+#  Proof lattice — 52 validators:
+#    ✔ type-soundness-gate ✔ security-gate ✔ self-evolution-harness ✔ … (45 total)
+#    ⏭ codex-entrypoint-contract   integration-only — needs a configured Codex host
+#    ⏭ contract-edge-gate          integration-only — needs the full product monorepo
+#    … (7 integration-only proofs)
+#  ────────────────────────────────────────────────
+#  45 passed · 7 skipped (integration-only) · 0 failed
+#  ✓ Atomic OS verified on this machine — every standalone proof passed.
 ```
 
-Every check runs the **live MCP server** in an isolated temp workspace — no host
-monorepo, no mocks. The edit checks exercise the byte-positivity law (a negative
-edit is allowed only with proof); the session checks prove the transactional
-window really snapshots, rolls back, and commits.
+**Zero failures on a bare clone — guaranteed.** Every proof that can run on a clone
+runs and passes: type-soundness, the write firewall, security + monotonicity,
+convergence, the self-evolution lattice, the byte-positivity law, transactional
+sessions, the broker parent-death reaper, and more. The 7 skipped proofs validate
+**wiring into an external target** (a configured Codex/OpenCode host, the product
+monorepo, accumulated runtime trace history, a code formatter) — a fresh clone is
+never wired in, so they are honestly skipped with the exact reason, never faked.
+Wire Atomic into your agent and run `npm run verify:integration` to exercise them.
+
+Prefer the fast check? `npm test` runs just the 47-assertion live smoke (build +
+MCP handshake + proven edits + transactional sessions + firewall) in an isolated
+temp workspace — no host monorepo, no mocks.
 
 ---
 
