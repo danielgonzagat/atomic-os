@@ -26,11 +26,23 @@ export function registerAgentTools(server: McpServer): void {
     description: 'Start a governed agent session. Use this atomic planning/progress receipt instead of native todowrite or other non-atomic planning tools. Returns sessionId for subsequent tools.',
     inputSchema: {
       issue: z.string().describe("Issue or task."),
-      steps: z.array(z.object({step:z.number().int().min(1),description:z.string(),expectedOutcome:z.string(),affectedFiles:z.array(z.string()).optional(),dependsOn:z.number().int().min(0).optional()})),
+      steps: z.array(z.object({step:z.number().int().min(1),detail:z.string().describe("Human-readable description of what this step does"),expectedOutcome:z.string(),affectedFiles:z.array(z.string()).optional(),dependsOn:z.number().int().min(0).optional()})),
     },
   }, async (a) => {
     try {
-      const s = createSession(a.issue, a.steps as AgentStep[]);
+      // Wire field is `detail` (a property literally named `description` collides
+      // with JSON Schema's reserved `description` annotation key — strict consumers
+      // like the Gemini API drop it from `properties` while keeping it in `required`,
+      // producing an invalid schema. Map it back to the internal `description`,
+      // still accepting a legacy `description` field for backward compatibility.
+      const steps: AgentStep[] = a.steps.map((st) => ({
+        step: st.step,
+        description: st.detail ?? (st as { description?: string }).description ?? '',
+        expectedOutcome: st.expectedOutcome,
+        affectedFiles: st.affectedFiles,
+        dependsOn: st.dependsOn,
+      }));
+      const s = createSession(a.issue, steps);
       recordEntry(s, s.plan);
       advancePhase(s);
       sessions.set(s.sessionId, s);
