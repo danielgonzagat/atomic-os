@@ -30,6 +30,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { installParentDeathReaper } from './parent-death-reaper.mjs';
 
 const SANDBOX_EXEC = '/usr/bin/sandbox-exec';
 const brokerArgs = process.argv.slice(2);
@@ -509,32 +510,7 @@ process.on('SIGINT', shutdown);
 // dominant source of leaked atomic-exec brokers accumulating until the machine ran
 // out of RAM.
 //
-// NB: process.ppid is captured ONCE by Node and is NOT updated on reparent, so we
-// cannot watch it change. Instead record the owning parent's pid at startup and
-// poll its LIVENESS with signal 0: once that throws ESRCH (no such process) the
-// owner is gone and we have been orphaned — reap cleanly so the socket / file
-// endpoint is removed and the process exits. EPERM means the pid still exists
-// (owner alive, just not signalable) so we keep serving.
-const BROKER_PARENT_PID = process.ppid;
-if (BROKER_PARENT_PID > 1) {
-  const parentReaper = setInterval(() => {
-    let parentAlive = true;
-    try {
-      process.kill(BROKER_PARENT_PID, 0);
-    } catch (err) {
-      parentAlive = err && err.code === 'EPERM';
-    }
-    if (!parentAlive) {
-      try {
-        process.stderr.write(
-          '[atomic-exec-broker] owning parent ' + BROKER_PARENT_PID +
-            ' gone; reaping orphaned broker\n',
-        );
-      } catch {
-        /* best-effort */
-      }
-      shutdown();
-    }
-  }, 2000);
-  parentReaper.unref();
-}
+// Extracted to parent-death-reaper.mjs (single source of truth) so resource-lifetime.proof.mjs
+// exercises the SAME reaper code that runs in production, making its RED-pre/GREEN-post verdict
+// about real behaviour. See that module's header for the ESRCH/EPERM rationale.
+installParentDeathReaper({ label: 'atomic-exec-broker', intervalMs: 2000, onOrphaned: shutdown });

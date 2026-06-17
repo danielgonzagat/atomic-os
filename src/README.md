@@ -19,6 +19,8 @@ research identifies as defective.
 
 ## Tools (114)
 
+> 114 tools are registered by the live server (`tools/list`); the load-bearing ones are grouped below.
+
 **Read (address by name, not line guess):**
 - `code_browse` — structured directory listing
 - `code_outline` — file → signature map (no bodies; token-cheap)
@@ -67,11 +69,13 @@ research identifies as defective.
 
 ```sh
 npx tsx scripts/mcp/atomic-edit/smoke.ts
-# 47 passed, 0 failed — engine + live MCP stdio round-trip (114 tools)
+# 260 passed, 2 failed — full engine + live MCP stdio harness (114 tools)
 #   + preview dry-run + cross-file rename via real tsconfig
 #   + sha256 concurrency guard + import/property ops
 #   + governance-guard refusal of CLAUDE.md
 #   + product intent / trust / behavior / truth / continuity / lock tools
+#   (the 2 failures are atomic_expand_self running lsp-mesh-e2e inside the
+#    self-expansion sandbox; needs a live host LSP mesh — green on the host.)
 
 node scripts/mcp/atomic-edit/smoke.mjs
 # 47 passed, 0 failed — production launcher/dist path
