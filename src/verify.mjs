@@ -38,6 +38,7 @@ const ENV = {
   monorepo: has(path.join(REPO, 'backend', 'src')) && has(path.join(REPO, 'frontend', 'src')),
   traceHistory: has(path.join(REPO, '.atomic', 'trace')) || has(path.join(SRC, '.atomic', 'trace')),
   formatter: hasBin('prettier') || hasBin('eslint'),
+  lspServer: hasBin('typescript-language-server'),
 };
 
 // Integration proofs: { matchSubstring -> { need: ENV key, why } }.
@@ -49,6 +50,7 @@ const INTEGRATION = [
   { m: 'contract-edge-gate', need: 'monorepo', why: 'the full product monorepo (backend/ + frontend/) fixture' },
   { m: 'algebra.proof', need: 'traceHistory', why: 'accumulated runtime edit-trace history (.atomic/trace)' },
   { m: 'converge-operator', need: 'formatter', why: 'a code formatter on PATH (prettier/eslint)' },
+  { m: 'lsp-mesh-e2e', need: 'lspServer', why: 'a TypeScript language server on PATH (npm i -g typescript-language-server)' },
 ];
 function integrationFor(cmd) {
   return INTEGRATION.find((g) => cmd.includes(g.m)) || null;
