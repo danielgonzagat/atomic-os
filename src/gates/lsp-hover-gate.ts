@@ -114,4 +114,4 @@ export function evaluateSync(ctx: EditGateContext): EditGateResult {
   return { id: GATE_NAME, status: 'unjudged', fact: 'Hover gate requires async LSP communication for symbol documentation.', locus: ctx.file };
 }
 
-export function gate(ctx) { return evaluateSync(ctx); }
+export function gate(ctx: EditGateContext): EditGateResult { return evaluateSync(ctx); }

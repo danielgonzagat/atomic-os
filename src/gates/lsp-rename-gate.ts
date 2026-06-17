@@ -84,4 +84,4 @@ export function evaluateSync(ctx: EditGateContext): EditGateResult {
   };
 }
 
-export function gate(ctx) { return evaluateSync(ctx); }
+export function gate(ctx: EditGateContext): EditGateResult { return evaluateSync(ctx); }

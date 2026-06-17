@@ -39,6 +39,7 @@ const MANDATORY_SELF_EXPANSION_VALIDATORS: readonly SelfExpansionValidator[] = [
   { phase: 'runtime-integrity', command: 'node gates/dist-live-integrity.proof.mjs --json' },
   { phase: 'runtime-freshness', command: 'node gates/dist-freshness.proof.mjs --json' },
   { phase: 'type', command: 'node gates/type-soundness-gate.proof.mjs --json' },
+  { phase: 'type-absolute', command: 'node gates/repo-typecheck-gate.proof.mjs --json' },
   { phase: 'semantic', command: 'node gates/structural-lint-gate.proof.mjs --json' },
   { phase: 'semantic-impact', command: 'node gates/algebra.proof.mjs' },
   { phase: 'semantic-impact', command: 'node gates/closure-universal.proof.mjs' },
