@@ -21,8 +21,19 @@ atomic-universal-*
 property-gate-*/
 probe-gate-*/
 atomic-type-gate-*/
+atomic-type-gate-*
 node-compile-cache/
 .mcp-cache/
 .turbo/
 .cache/
 build/
+
+# L03 temp-artifact hygiene closure — proof/runtime scratch that leaked into the
+# source tree on abnormal exit (the temp-artifact-hygiene gate enforces zero NEW
+# leaks; these patterns make any out-of-band leak invisible to git regardless).
+atomic-rt-proof-*
+converge-*-proof-*
+converge-symbol-mutation-proof-*
+readcode-*-root-*
+*.tmp
+.hygiene-canary-leak.*
