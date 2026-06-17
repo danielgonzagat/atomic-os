@@ -51,6 +51,7 @@ const INTEGRATION = [
   { m: 'algebra.proof', need: 'traceHistory', why: 'accumulated runtime edit-trace history (.atomic/trace)' },
   { m: 'converge-operator', need: 'formatter', why: 'a code formatter on PATH (prettier/eslint)' },
   { m: 'lsp-mesh-e2e', need: 'lspServer', why: 'a TypeScript language server on PATH (npm i -g typescript-language-server)' },
+  { m: 'lsp-semantic-delta', need: 'lspServer', why: 'a TypeScript language server on PATH (npm i -g typescript-language-server)' },
 ];
 function integrationFor(cmd) {
   return INTEGRATION.find((g) => cmd.includes(g.m)) || null;

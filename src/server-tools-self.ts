@@ -41,6 +41,7 @@ const MANDATORY_SELF_EXPANSION_VALIDATORS: readonly SelfExpansionValidator[] = [
   { phase: 'type', command: 'node gates/type-soundness-gate.proof.mjs --json' },
   { phase: 'type-absolute', command: 'node gates/repo-typecheck-gate.proof.mjs --json' },
   { phase: 'lsp-semantic', command: 'node gates/lsp-mesh-e2e.proof.mjs --json' },
+  { phase: 'lsp-semantic-delta', command: 'node gates/lsp-semantic-delta.proof.mjs --json' },
   { phase: 'semantic', command: 'node gates/structural-lint-gate.proof.mjs --json' },
   { phase: 'semantic-impact', command: 'node gates/algebra.proof.mjs' },
   { phase: 'semantic-impact', command: 'node gates/closure-universal.proof.mjs' },
