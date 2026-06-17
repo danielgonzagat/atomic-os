@@ -41,7 +41,8 @@
     "test:unit": "vitest run --config src/vitest.config.ts",
     "bench": "node src/bench.mjs",
     "cli": "node src/atomic-cli.mjs",
-    "prepublishOnly": "node src/build.mjs"
+    "prepublishOnly": "node src/build.mjs",
+    "paradigm-verify": "node src/paradigm-verify.mjs"
   },
   "engines": {
     "node": ">=20"

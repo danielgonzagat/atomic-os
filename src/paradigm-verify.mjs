@@ -26,7 +26,21 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = process.env.ATOMIC_EDIT_REPO_ROOT ?? path.resolve(dir, '..', '..', '..');
+// Resolve the repo root ROBUSTLY across layouts (kloel: scripts/mcp/atomic-edit = 3-deep; the public
+// atomic-os: src/ = 1-deep) — walk up from this file until a dir contains `formal/atomic-algebra`, so
+// `npm run paradigm-verify` works from a fresh clone of either with NO env var. Falls back to the kloel
+// 3-deep guess, then honors an explicit ATOMIC_EDIT_REPO_ROOT override above all.
+function findRepoRoot(start) {
+  let d = start;
+  for (let i = 0; i < 8; i += 1) {
+    if (fs.existsSync(path.join(d, 'formal', 'atomic-algebra'))) return d;
+    const up = path.dirname(d);
+    if (up === d) break;
+    d = up;
+  }
+  return path.resolve(start, '..', '..', '..');
+}
+const repoRoot = process.env.ATOMIC_EDIT_REPO_ROOT ?? findRepoRoot(dir);
 const env = { ...process.env, ATOMIC_EDIT_REPO_ROOT: repoRoot };
 const ALG = path.join(repoRoot, 'formal', 'atomic-algebra'); // repo-root-relative algebra corpus
 
