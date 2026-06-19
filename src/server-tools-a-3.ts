@@ -10,6 +10,31 @@ import { ok, fail, commit, writeWithTrace } from './server-helpers-result.js';
 import { replaceCalleeKeepArgs, replaceCallArg, insertCallArg, removeCallArg } from './engine-ops.js';
 import { universalReplaceLiteral, universalReplacePropertyValue, universalRenamePropertyKey } from './engine-universal.js';
 
+// Compose ES import statements for atomic_create_file's `imports[]` so create +
+// N imports is ONE atomic, syntax-validated write (instead of create_file + N×
+// atomic_add_import — the 3-6x tool-call tax). Side-effect / default / named /
+// type-only forms; the single validated write still proves the whole result parses.
+interface CreateImport {
+  module: string;
+  name?: string;
+  alias?: string;
+  default?: string;
+  typeOnly?: boolean;
+}
+function renderImportLine(imp: CreateImport): string {
+  const kw = imp.typeOnly ? 'import type' : 'import';
+  if (!imp.name && !imp.default) return `import '${imp.module}';`;
+  const clauses: string[] = [];
+  if (imp.default) clauses.push(imp.default);
+  if (imp.name) clauses.push(`{ ${imp.name}${imp.alias ? ` as ${imp.alias}` : ''} }`);
+  return `${kw} ${clauses.join(', ')} from '${imp.module}';`;
+}
+export function composeWithImports(content: string, imports?: CreateImport[]): string {
+  if (!imports || imports.length === 0) return content;
+  const header = imports.map(renderImportLine).join('\n');
+  return `${header}\n\n${content.replace(/^\n+/, '')}`;
+}
+
 export function registerToolsA3(server: McpServer): void {
 server.registerTool(
   'atomic_delete_range',
@@ -71,6 +96,21 @@ server.registerTool(
     inputSchema: {
       file: z.string().describe('repo-relative path of the file to create'),
       content: z.string().describe('full file content'),
+      imports: z
+        .array(
+          z.object({
+            module: z.string().describe("module specifier, e.g. './types' or 'zod'"),
+            name: z.string().optional().describe('named import; omit for a side-effect import'),
+            alias: z.string().optional().describe('local alias for the named import'),
+            default: z.string().optional().describe('default import binding name'),
+            typeOnly: z.boolean().optional().describe('emit `import type`'),
+          }),
+        )
+        .optional()
+        .describe(
+          'cross-module imports to prepend in ONE atomic, syntax-validated write — the ' +
+            'composite that replaces create_file + N×atomic_add_import (cuts 3-6x tool calls)',
+        ),
       overwrite: z
         .boolean()
         .optional()
@@ -108,15 +148,16 @@ server.registerTool(
       }
       const before = existingBefore;
       guardSha(before, a.expectedSha256);
+      const effectiveContent = composeWithImports(a.content, a.imports);
       const edit =
         before === ''
-          ? { start: { line: 1, column: 1 }, end: { line: 1, column: 1 }, newText: a.content }
+          ? { start: { line: 1, column: 1 }, end: { line: 1, column: 1 }, newText: effectiveContent }
           : (() => {
               const lines = before.split('\n');
               return {
                 start: { line: 1, column: 1 },
                 end: { line: lines.length, column: lines[lines.length - 1].length + 1 },
-                newText: a.content,
+                newText: effectiveContent,
               };
             })();
       const r = applyEdits(relPath, before, [edit]);
