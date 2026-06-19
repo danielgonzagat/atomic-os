@@ -280,12 +280,18 @@ function diagnoseChanged(
     const errs = [
       ...program.getSyntacticDiagnostics(sf),
       ...program.getSemanticDiagnostics(sf),
-    ].filter((d) => d.category === ts.DiagnosticCategory.Error);
+    ].filter(
+      (d) => d.category === ts.DiagnosticCategory.Error && !BOUNDED_COMPILE_CONFIG_NOISE.has(d.code),
+    );
     counts.set(rel, errs.length);
     diags.set(rel, errs);
   }
   return { counts, diags };
 }
+
+const BOUNDED_COMPILE_CONFIG_NOISE = new Set<number>([
+  6059, 6307, 18003, 6504,
+]);
 
 function toRed(repoRoot: string, rel: string, d: ts.Diagnostic): GateRed {
   let locus: string | undefined;
