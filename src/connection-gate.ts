@@ -152,16 +152,37 @@ export function extractImportSpecifiers(content: string): string[] {
 function candidatesFor(baseAbs: string): string[] {
   const c = [
     baseAbs,
-    `${baseAbs}.ts`, `${baseAbs}.tsx`, `${baseAbs}.js`, `${baseAbs}.jsx`,
-    `${baseAbs}.mjs`, `${baseAbs}.cjs`, `${baseAbs}.json`,
+    `${baseAbs}.ts`, `${baseAbs}.tsx`, `${baseAbs}.mts`, `${baseAbs}.cts`,
+    `${baseAbs}.js`, `${baseAbs}.jsx`, `${baseAbs}.mjs`, `${baseAbs}.cjs`, `${baseAbs}.json`,
     `${baseAbs}.py`, `${baseAbs}.go`, `${baseAbs}.rb`, `${baseAbs}.rs`,
     `${baseAbs}.java`, `${baseAbs}.c`, `${baseAbs}.h`, `${baseAbs}.cc`, `${baseAbs}.cpp`,
-    path.join(baseAbs, 'index.ts'), path.join(baseAbs, 'index.tsx'), path.join(baseAbs, 'index.js'),
+    path.join(baseAbs, 'index.ts'), path.join(baseAbs, 'index.tsx'),
+    path.join(baseAbs, 'index.mts'), path.join(baseAbs, 'index.cts'),
+    path.join(baseAbs, 'index.js'), path.join(baseAbs, 'index.jsx'),
+    path.join(baseAbs, 'index.mjs'), path.join(baseAbs, 'index.cjs'),
     path.join(baseAbs, '__init__.py'),
   ];
-  if (baseAbs.endsWith('.js')) c.push(`${baseAbs.slice(0, -3)}.ts`, `${baseAbs.slice(0, -3)}.tsx`);
+  // moduleResolution bundler/node16 + allowImportingTsExtensions: an explicit
+  // .js/.jsx/.mjs/.cjs specifier may resolve to the corresponding TS source file
+  // (the #1 config of modern TS projects — './x.js' on disk is './x.ts'). Without
+  // these rewrites the connection gate falsely reddens valid imports and the agent
+  // is forced into a bash bypass.
+  const extRewrite: Record<string, string[]> = {
+    '.js': ['.ts', '.tsx'],
+    '.jsx': ['.tsx'],
+    '.mjs': ['.mts'],
+    '.cjs': ['.cts'],
+  };
+  for (const [from, tos] of Object.entries(extRewrite)) {
+    if (baseAbs.endsWith(from)) {
+      const stem = baseAbs.slice(0, -from.length);
+      for (const to of tos) c.push(`${stem}${to}`);
+    }
+  }
   return c;
 }
+
+export const candidatesForSpecifier = candidatesFor;
 
 /** Resolve a RELATIVE specifier against dirname(fromAbs), consulting pending+disk. */
 function relativeImportResolvesAbs(fromAbs: string, spec: string): boolean {
