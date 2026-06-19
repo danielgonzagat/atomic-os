@@ -60,7 +60,7 @@ for (const t of ['atomic_edit', 'atomic_replace_at', 'atomic_ast_edit', 'atomic_
 }
 
 // real firewall-guarded edit: content-addressed, no coordinates
-const ed = await rpc(3, 'tools/call', { name: 'atomic_replace_at', arguments: { file: 'm.py', mode: 'content', anchor: 'greet', newText: 'salute', occurrence: 1, proofOfIncorrectness: 'placeholder verb "greet" is incorrect for this API; the contract specifies "salute" as the canonical function name.' } });
+const ed = await rpc(3, 'tools/call', { name: 'atomic_replace_at', arguments: { file: 'm.py', mode: 'content', anchor: 'greet', newText: 'salute', occurrence: 1, proofOfIncorrectness: 'The function name "greet" in this Python module is semantically incorrect for the target API. The canonical function name specified by the contract and used consistently across all callers is "salute" — the byte sequence g-r-e-e-t must be replaced with s-a-l-u-t-e to comply with the established naming convention. This ensures correctness of all downstream references and avoids confusion with unrelated greeting functions that may exist in other modules. The bytes "greet" constitute an incorrect identifier that must not persist in a correct-by-construction codebase.' } });
 check('atomic_replace_at applied', txt(ed).includes('Atomic edit applied'));
 const after = fs.readFileSync(path.join(work, 'm.py'), 'utf8');
 check('edit persisted (greet->salute)', after.includes('def salute(n)'));
@@ -78,7 +78,7 @@ const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/;
 const beginR = await rpc(5, 'tools/call', { name: 'atomic_session_begin', arguments: {} });
 const sid = (txt(beginR).match(UUID) ?? [])[0];
 check('atomic_session_begin returns a session id', !!sid);
-await rpc(6, 'tools/call', { name: 'atomic_replace_at', arguments: { file: 'm.py', mode: 'content', anchor: 'salute', newText: 'hail', occurrence: 1, proofOfIncorrectness: 'verb "salute" is corrected to "hail" to exercise a negative-byte edit under proof inside the session window.' } });
+await rpc(6, 'tools/call', { name: 'atomic_replace_at', arguments: { file: 'm.py', mode: 'content', anchor: 'salute', newText: 'hail', occurrence: 1, proofOfIncorrectness: 'The function name "salute" in this Python module is semantically incorrect for the updated API specification. The canonical name specified by the revised contract is "hail" — the byte sequence s-a-l-u-t-e must be replaced with h-a-i-l to maintain compliance with the current naming convention. This correction is required to exercise the negative-byte proof path inside the transactional session window, demonstrating that atomic firewalled edits respect session boundaries and rollback semantics. The identifier "salute" is a byte-level inaccuracy that must not persist.' } });
 check('edit inside session applied (salute->hail)', fs.readFileSync(path.join(work, 'm.py'), 'utf8').includes('def hail(n)'));
 await rpc(7, 'tools/call', { name: 'atomic_session_rollback', arguments: { sessionId: sid, close: true } });
 const restored = fs.readFileSync(path.join(work, 'm.py'), 'utf8');
@@ -86,7 +86,7 @@ check('atomic_session_rollback restored the window (hail->salute)', restored.inc
 // begin -> edit -> commit must KEEP the edit and close the window
 const begin2 = await rpc(8, 'tools/call', { name: 'atomic_session_begin', arguments: {} });
 const sid2 = (txt(begin2).match(UUID) ?? [])[0];
-await rpc(9, 'tools/call', { name: 'atomic_replace_at', arguments: { file: 'm.py', mode: 'content', anchor: 'salute', newText: 'hail', occurrence: 1, proofOfIncorrectness: 'verb "salute" is corrected to "hail" to exercise a negative-byte edit under proof inside the session window.' } });
+await rpc(9, 'tools/call', { name: 'atomic_replace_at', arguments: { file: 'm.py', mode: 'content', anchor: 'salute', newText: 'hail', occurrence: 1, proofOfIncorrectness: 'The function name "salute" in this Python module is semantically incorrect for the updated API specification. The canonical name specified by the revised contract is "hail" — the byte sequence s-a-l-u-t-e must be replaced with h-a-i-l to maintain compliance with the current naming convention. This correction is required to exercise the negative-byte proof path inside the transactional session window, demonstrating that atomic firewalled edits respect session boundaries and rollback semantics. The identifier "salute" is a byte-level inaccuracy that must not persist.' } });
 const cm = await rpc(10, 'tools/call', { name: 'atomic_session_commit', arguments: { sessionId: sid2 } });
 check('atomic_session_commit kept the edit (salute->hail)', fs.readFileSync(path.join(work, 'm.py'), 'utf8').includes('def hail(n)'));
 check('atomic_session_commit emitted a receipt', /session|commit/i.test(txt(cm)));

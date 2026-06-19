@@ -27,7 +27,7 @@ check('FLOOR <20-char proof still refused',
 
 // HONESTY: free-text proof admitted, but labelled asserted / recomputed:false (never a faked verification).
 {
-  const r = requireNegativeActionProof({ action: 'delete', target: 'x', targetUnit: 'file', removedByteCount: 5, proofOfIncorrectness: 'this code is dead and unreachable per the call-graph' });
+  const r = requireNegativeActionProof({ action: 'delete', target: 'x', targetUnit: 'file', removedByteCount: 5, proofOfIncorrectness: 'this code is dead and unreachable per the call-graph analysis. The function was previously called from handler.ts but that caller was removed in a prior refactor. No imports, requires, or dynamic references resolve to this target unit, making it definitively unreachable dead code that can be safely removed without affecting any live execution path in the codebase.' });
   check('HONESTY free-text proof ⇒ witnessKind=asserted, recomputed=false (honest, not faked)', r.witnessKind === 'asserted' && r.recomputed === false);
 }
 

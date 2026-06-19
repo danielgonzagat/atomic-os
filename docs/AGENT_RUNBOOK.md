@@ -2,6 +2,11 @@
 
 This document describes how AI coding agents should operate with Atomic OS.
 
+> **Template:** this runbook is a starting point for your own project. The
+> command sections below use generic names; adapt them to your project's actual
+> scripts and directory layout. For this repo's own commands, see the
+> loop in `docs/OPERATING_GUIDE.md`.
+
 ## Mission
 
 Convert an existing product shell into a production-grade machine
@@ -34,52 +39,27 @@ This includes `git restore <path>`, `git restore --source`, and
 explicit snapshot captured before the edit. If no safe snapshot exists, stop and
 ask the human.
 
-## Standard Commands
+## Standard Commands (adapt to your project)
 
-### Root
+The atomic workflow for this repo:
+
+```bash
+npm run build         # compile src/ → src/dist/
+npm test              # 47/47 smoke: live MCP round-trip
+npm run verify        # full proof lattice + smoke
+npm run bench         # AtomicBench expansion metrics
+```
+
+For your own project, typical commands:
 
 ```bash
 npm run lint
 npm run typecheck
 npm test
-npm run guard:db-push
 ```
 
-### Backend
-
-```bash
-npm --prefix backend run lint
-npm --prefix backend run build
-npm run backend:boot-smoke
-```
-
-### Frontend
-
-```bash
-npm --prefix frontend run lint
-npm --prefix frontend run typecheck
-npm --prefix frontend run build
-```
-
-### Worker
-
-```bash
-npm --prefix worker run build
-```
-
-### Prisma
-
-```bash
-npx prisma generate
-npx prisma validate
-```
-
-### PULSE
-
-```bash
-npx ts-node --project scripts/pulse/tsconfig.json scripts/pulse/index.ts
-npx ts-node scripts/pulse/index.ts --report
-```
+Adapt the sections below to your project's backend, frontend, worker,
+database, and quality tools.
 
 ## Risk Matrix
 

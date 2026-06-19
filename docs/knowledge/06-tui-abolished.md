@@ -44,7 +44,7 @@ whose result carries the char-level `atomicDiff` ([-removed-]{+added+}) +
 **Enforcement COMPLETE across all 3 CLIs (2026-05-16, branch
 <dev-branch>):**
 - Claude Code: `.claude/settings.json` PreToolUse →
-  `scripts/mcp/atomic-edit/atomic-only-hook.mjs` DENIES Edit/Write/MultiEdit/
+  `src/atomic-only-hook.mjs` DENIES Edit/Write/MultiEdit/
   NotebookEdit + Bash in-place code mutation + apply_patch on code-ext files
   (steers to mcp__atomic-edit__*), ALLOWS prose/.md + non-edit tools. Stop
   hook runs `trace-coverage-audit.mjs` (advisory). Full matrix re-tested
@@ -63,7 +63,7 @@ whose result carries the char-level `atomicDiff` ([-removed-]{+added+}) +
   apply_patch. Was previously soft-only (AGENTS.md "prefer"); now HARD.
   Runtime-simulated 2026-05-16: edit code→deny, .md→pass, .ipynb→deny,
   sed -i→deny, npm test→pass. atomic-edit server smoke 83/83.
-- Single source of truth = `scripts/mcp/atomic-edit/atomic-only-hook.mjs`,
+- Single source of truth = `src/atomic-only-hook.mjs`,
   shared verbatim by all 3 CLIs (no rule duplication).
 - `shapePayload` emits a compact human `summary` first (✅ + file +
   [-x-]{+y+} + validation + zeroCodeTrust + trace path) = the on-screen

@@ -1,7 +1,7 @@
 # Atomic-Edit — Multi-CLI Activation Matrix
 
 One shared tool — the `atomic-edit` MCP server
-(`src/atomic-edit-mcp-launcher.sh`, 64 tools, `node dist/server.js`,
+(`src/atomic-edit-mcp-launcher.sh`, 116+ tools, `node dist/server.js`,
 self-building) — connected as the **default operating mode** for every AI CLI
 in this workspace. The coarse mainstream editor is banned for code; the
 authorial hierarchical/atomic mode is the persistent default.
@@ -14,11 +14,11 @@ tools · 4 obeys the LEI/operating rule · 5 records progress · 6 workboard/loc
 
 | #           | Status                                                                                                                                         |
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1 standard  | `.mcp.json` `atomic-edit` (committed) + `docs/ai/ATOMIC_EDIT_OPERATING_GUIDE.md` + auto-memory                                                 |
-| 2 state     | repo (`.mcp.json`, docs/ai/, dist self-build)                                                                                                  |
+| 1 standard  | `.mcp.json` `atomic-edit` (committed) + `docs/OPERATING_GUIDE.md` + auto-memory                                                 |
+| 2 state     | repo (`.mcp.json`, docs/, dist self-build)                                                                                                  |
 | 3 tools     | `mcp__atomic-edit__*` after one-time project trust on a fresh session                                                                          |
 | 4 obeys     | OPERATING_GUIDE loop; prefers atomic over builtin Edit                                                                                         |
-| 5 progress  | `docs/ai/ATOMIC_EDIT_PROGRESS.md`                                                                                                              |
+| 5 progress  | `PROGRESS.md`                                                                                                              |
 | 6 workboard | this orchestrator session; isolated commits                                                                                                    |
 | 7 **proof** | ✅ blind test 2026-05-15: self-edited `server.ts` via `atomic_replace_literal` through production launcher; smoke 47/47; zero builtin fallback |
 | 8 limits    | native tools need a fresh session after `.mcp.json` change (mid-session edits not hot-loaded)                                                  |
@@ -61,7 +61,7 @@ tools · 4 obeys the LEI/operating rule · 5 records progress · 6 workboard/loc
 Shared across all 3 CLIs because it lives in the one shared MCP payload, not
 in any CLI. Every mutating tool now returns `atomicDiff` (char-level
 `[-removed-]{+added+}`, ANSI) + `operationId` + `tracePath`; full
-`AtomicEditTrace` persisted to gitignored `docs/ai/traces/`.
+`AtomicEditTrace` persisted to gitignored `.atomic/traces/`.
 
 | Concern                           | Reality (honest)                                                                                                                 |
 | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
@@ -70,7 +70,7 @@ in any CLI. Every mutating tool now returns `atomicDiff` (char-level
 | Net effect                        | additive: `atomicDiff` shows the true atomic change **beside** the harness's unavoidable line block                              |
 | Token economy                     | committed path `ATOMIC_EDIT_VERBOSITY=L1` default (compact proof + trace pointer, no verbose legacy diff); preview floors L2     |
 | Per-CLI verbosity                 | env `ATOMIC_EDIT_VERBOSITY` (L0/L1/L2/L3) in each CLI's MCP env block; unset ⇒ L1                                                |
-| Regression guard                  | `node scripts/mcp/atomic-edit/audit-atomicity.mjs [--json] [--min-ratio=]` — fail-closed, fixtures filtered                      |
+| Regression guard                  | `node src/audit-atomicity.mjs [--json] [--min-ratio=]` — fail-closed, fixtures filtered                      |
 
 Acceptance honest-statement: if the owner still sees a whole-line red/green
 block for a sub-line change, that is the **closed harness renderer**, which

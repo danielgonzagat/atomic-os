@@ -15,6 +15,49 @@ npm run build
 npm run smoke       # expect: 0 failed
 ```
 
+### Prerequisites — tree-sitter native grammars
+
+The universal multi-language engine depends on tree-sitter grammar packages
+(`tree-sitter-javascript`, `tree-sitter-python`, `tree-sitter-typescript`, …)
+that require a working C++ compiler and **node-gyp** to build their native
+bindings during `npm install`.
+
+**macOS:**
+
+```sh
+xcode-select --install          # if you don't have the Xcode CLI tools yet
+```
+
+**Linux (Debian/Ubuntu):**
+
+```sh
+sudo apt install build-essential python3 make g++
+```
+
+**Linux (Fedora/RHEL):**
+
+```sh
+sudo dnf groupinstall "Development Tools"
+```
+
+**Windows:**
+
+```sh
+npm install --global windows-build-tools   # via admin terminal
+# or install Visual Studio Build Tools with the "Desktop C++" workload
+```
+
+Verify the toolchain is reachable:
+
+```sh
+npm install -g node-gyp   # optional, but confirms the host can build
+node-gyp list             # prints available toolchains
+```
+
+If `npm install` fails with a `node-gyp` or `g++` error, install the
+prerequisites above and retry. A clean `npm install` builds every grammar;
+there is no prebuilt binary download step.
+
 Let `LAUNCHER=~/atomic-os/src/atomic-edit-mcp-launcher.sh`. The launcher needs
 no `tsx`/`npx` and no network; it self-rebuilds when a source `.ts` is newer
 than `src/dist/server.js`.

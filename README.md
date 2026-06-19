@@ -6,14 +6,14 @@ every change is the smallest faithful mutation, proven character-by-character,
 validated before it's written, reversible, and where destroying correct bytes
 requires a written proof.**
 
-[![tools](https://img.shields.io/badge/tools-114-E85D30)](#what-you-get--114-tools)
+[![tools](https://img.shields.io/badge/tools-116-E85D30)](#what-you-get--116-tools)
 [![languages](https://img.shields.io/badge/structural%20edit-multi--language%20WASM-blue)](#the-universal-engine-multi-language-pure-wasm)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![smoke](https://img.shields.io/badge/smoke-47%2F47-success)](#verify-it-yourself)
 [![benchmark](https://img.shields.io/badge/AtomicBench-98%25%20bytes%20avoided%20vs%20line-E85D30)](docs/BENCHMARK.md)
 
 > This is the **complete** Atomic OS — the full engine we run in production,
-> generalized for any repo: 114 tools, the universal multi-language engine, the
+> generalized for any repo: 116 tools, the universal multi-language engine, the
 > write firewall, transactional sessions, guarded command execution, the
 > byte-positivity law, and the proof/convergence governance layer.
 
@@ -169,7 +169,7 @@ Full setup, including the optional deny-hook: [`docs/INSTALL.md`](docs/INSTALL.m
 
 ---
 
-## What you get — 114 tools
+## What you get — 116 tools
 
 | Group | Tools (highlights) | What it gives you |
 |---|---|---|
@@ -188,7 +188,7 @@ Full setup, including the optional deny-hook: [`docs/INSTALL.md`](docs/INSTALL.m
 | **Files & governance** | `atomic_create_file`, `atomic_delete_file`, `atomic_lock_acquire/release`, `code_file_stat` | Firewall-guarded create/delete + multi-agent locks. |
 | **Proof & measurement** | `atomic_bypass_report`, `truth_receipt`, `behavior_receipt`, `zero_code_trust_score`, `product_intent_contract`, `continuity_status` | The bypass-rate meter + trust/proof/continuity receipts. |
 
-Run `tools/list` against the server for the full, current set (114 tools).
+Run `tools/list` against the server for the full, current set (116 tools).
 
 ---
 
@@ -417,7 +417,7 @@ proves it preserved the rest of the product.
 
 ```
 src/                     the MCP server (compiles to src/dist/)
-  server.ts              entrypoint — registers all 114 tools across the groups
+  server.ts              entrypoint — registers all 116 tools across the groups
   engine*.ts             the edit engine (apply, validate, zones, rename, universal)
   guard.ts               repo-containment + your protected-file config
   native-bridge.ts       the universal engine — web-tree-sitter (WASM), in-process

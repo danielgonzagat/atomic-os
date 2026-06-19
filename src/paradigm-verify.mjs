@@ -74,6 +74,15 @@ const CHECKS = [
   { prop: 'P7-lean', label: 'obligation-preserving confluence: Lean 4 induction principle (all N)', cmd: `cd "${ALG}" && "${LEAN_BIN ?? 'lean'}" NwayConfluence.lean`, requires: 'lean', present: HAVE_LEAN, skipNote: 'lean toolchain absent — committed Lean proof formal/atomic-algebra/NwayConfluence.lean (machine-checked at authoring; Z3 P7-z3 covers base+step here)' },
   // ── PART C U1: the (a) inverted byte-default + the disproof→generation loop (P8) ──
   { prop: 'P8', label: 'disproof-as-recomputable-signal: teeth + consumer + briefing', cmd: 'node gates/negative-proof-teeth.proof.mjs && node gates/self-evolution-disproof-consumer.proof.mjs --json && node gates/self-evolution-disproof-briefing.proof.mjs --json' },
+  // ── PART D.3: emergent fusions E1–E4 (the never-before-done capabilities) ──
+  { prop: 'E1', label: 'confluent friction-routed multi-agent editing (routing × algebra)', cmd: 'node gates/e1-confluent-routing.proof.mjs' },
+  { prop: 'E2', label: 'minimal recomputable disproof core (delta-debug over gate set)', cmd: 'node gates/e2-minimal-disproof.proof.mjs' },
+  { prop: 'E3', label: 'org-scale self-improving guidebooks (monotonic admission + inheritance)', cmd: 'node gates/e3-guidebooks.proof.mjs' },
+  { prop: 'E4', label: 'unified whole-system integration (E1×E2×E3 closed gradient loop)', cmd: 'node gates/e4-unified.proof.mjs' },
+  // ── PART D.4: per-symbol closure proof (PS1-PS6) — symbol-level closure tighter than file-level ──
+  { prop: 'PS-sym', label: 'per-symbol closure proof (PS1-PS6: reduction factor, decoupling, false-coupling avoidance)', cmd: 'node gates/symbol-closure.proof.mjs' },
+  // ── PART D A-G6: self-host demonstration — atomic governs its own source end-to-end ──
+  { prop: 'Self', label: 'self-host demo: bounded slice (floor + algebra + disproof + router + observatory) self-applied on atomic own source', cmd: 'node gates/self-host-demo.proof.mjs' },
   // ── PART F: the universal truth funnel (the second emergent property) ──
   { prop: 'P9+P10', label: 'truth-funnel: verifier-gated answers + byte-positive monotone convergence (mechanism)', cmd: 'node gates/truth-funnel.proof.mjs --json' },
   // ── hardening campaign (2026-06-18): discriminating regression proof for the 14 defect fixes ──

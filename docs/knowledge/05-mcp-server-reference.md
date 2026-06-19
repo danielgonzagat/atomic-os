@@ -9,8 +9,8 @@ metadata:
 
 Built 2026-05-15 to close the "Line-Oriented Action Bottleneck" Daniel
 formalized; **v2** (same day) added the research-driven read side + symbol
-edits. `scripts/mcp/atomic-edit/` + launcher
-`scripts/mcp/atomic-edit-mcp-launcher.sh`, registered in `.mcp.json` as
+edits. `src/` + launcher
+`src/atomic-edit-mcp-launcher.sh`, registered in `.mcp.json` as
 `atomic-edit` (cross-session, launcher targets `server.ts`). Modules:
 `engine.ts` (range/insert/delete/batch/literal/in-file-rename + ts/json
 syntactic validation), `symbols.ts` (scoped fuzzy selector resolver),
@@ -40,7 +40,7 @@ server through the real production path (launcher → MCP stdio client) and it
 `server.ts` McpServer `version "1.0.0"→"3.0.0"` on line 153; the live sha256
 guard refused a stale-hash write; `code_outline` resolved symbols on a real
 file. Self-edited server still runs: tsc --strict 0 errors, smoke 43/43,
-OP_EXIT=0. Reproduce: `npx tsx scripts/mcp/atomic-edit/operational-use.ts`
+OP_EXIT=0. Reproduce: `npx tsx src/operational-use.ts`
 (and `demo-live.ts`). Committed to branch `<dev-branch>`.
 NOTE: `mcp__atomic-edit__*` native tools require a fresh session (server was
 registered mid-session); the production-path proof above is equivalent.
@@ -54,7 +54,7 @@ CodeStruct −12–38% tokens); block/in-function change worst-case up to ~36×;
 blast radius ~4× fewer lines touched. Honest limit: this measures the
 mechanical cost+safety drivers, NOT a live model Pass@1/latency A/B (that is
 the cited CodeStruct evidence: +1.2–5.0% Pass@1, empty-patch 46.6%→7.2%).
-Reproduce: `npx tsx scripts/mcp/atomic-edit/benchmark.ts`.
+Reproduce: `npx tsx src/benchmark.ts`.
 
 **OPENCODE PERMANENT STANDARD (2026-05-15):** atomic editing is now the
 default for ALL OpenCode agents/subagents. Registered in project
@@ -116,7 +116,7 @@ OpenCode only via a fork (rejected — maintenance liability). Delivered the
 in-repo-possible equivalent: `advanced.ts::characterDiff` → `atomicDiff` field
 (`[-removed-]{+added+}` char-level LCS, ANSI+bracket-legible) in EVERY mutating
 payload, shown *beside* the unavoidable harness block. `trace.ts` =
-`AtomicEditTrace` v1.0 → gitignored `docs/ai/traces/<op>.json`; verbosity L0–L3
+`AtomicEditTrace` v1.0 → gitignored `.atomic/traces/<op>.json`; verbosity L0–L3
 via env `ATOMIC_EDIT_VERBOSITY`, **committed path defaults L1** (compact proof
 + trace pointer, no verbose legacy diff = real token saving on the hot path),
 **preview floors L2** (full proof; preserves canonical smoke contract → ZERO
@@ -143,9 +143,9 @@ promise "proibir a TUI" — it's outside repo control; ship the additive proof
 
 **How to apply:** for TS/JS/JSON structural/sub-line edits, prefer these over
 blunt `Edit`. Loop: `code_outline` → `code_read_symbol` → narrowest atomic op
-(`preview:true` if unsure). Verify `npx tsx scripts/mcp/atomic-edit/smoke.ts`
+(`preview:true` if unsure). Verify `node src/smoke.mjs`
 (43 assertions, 0 fail, incl. live MCP round-trip + cross-file rename + sha guard).
-Permanent operating doc: `docs/ai/ATOMIC_EDIT_OPERATING_GUIDE.md`. Activation:
+Permanent operating doc: `docs/OPERATING_GUIDE.md`. Activation:
 one-time project MCP trust approval on fresh session (or `"atomic-edit"` in
 this project's `enabledMcpServers` in `~/.claude.json`). Honest limits:
 cross-file rename needs reachable tsconfig; non-TS/JS/JSON = range-only

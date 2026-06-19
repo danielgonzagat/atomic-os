@@ -34,6 +34,7 @@
   "scripts": {
     "build": "node src/build.mjs",
     "start": "bash src/atomic-edit-mcp-launcher.sh",
+"postinstall": "node src/build.mjs",
     "smoke": "node src/smoke.mjs",
     "test": "node src/smoke.mjs",
     "verify": "node src/verify.mjs",
@@ -41,7 +42,7 @@
     "test:unit": "vitest run --config src/vitest.config.ts",
     "bench": "node src/bench.mjs",
     "cli": "node src/atomic-cli.mjs",
-    "prepublishOnly": "node src/build.mjs",
+"prepublishOnly": "node src/build.mjs && node src/smoke.mjs",
     "paradigm-verify": "node src/paradigm-verify.mjs"
   },
   "engines": {

@@ -20,7 +20,7 @@ blanks worktree CLAUDE.md/AGENTS.md/.claude, emits launch-normal/launch-atomic),
 `score` (node scorer → `rounds/round-NN/result.json`), `tmo` (portable
 timeout shim). Per round: `bash run-round N` → background `launch-normal` &
 `launch-atomic` → Monitor `.done` markers → `node score N` → formalize →
-improve `scripts/mcp/atomic-edit/**` via atomic-edit MCP → rebuild dist + smoke
+improve `src/**` via atomic-edit MCP → rebuild dist + smoke
 → commit to ab/atomic-harness → next round.
 
 **Task (oracle):** decompose `backend/src/kloel/unified-agent.service.ts`
@@ -727,7 +727,7 @@ atomic-only-hook.mjs FAILED to deny on a deep backend/src/** path (also did
 atomic). R43 DISCARDED.
 
 DECISIVE NEXT (tooldev27 — fresh worker; HARDEN the kernel "no disguised
-shell write" invariant in scripts/mcp/atomic-edit/atomic-only-hook.mjs;
+shell write" invariant in src/atomic-only-hook.mjs;
 HIGHEST PRIORITY — without airtight enforcement EVERY A/B atomic measurement
 is corruptible; founding kernel-fixed list + §"não fazer shell write
 disfarçado"; shared hook across Codex/Claude/OpenCode → generalizable, NOT
@@ -996,7 +996,7 @@ replace_text×4 across 3 files) — bigger architectural lever, defer.
 
 DECISIVE NEXT (tooldev23 — fresh worker; forgiving input aliases on the
 high-frequency read/edit tools; generalizable, zero-risk, evidence-backed by
-R34+R38 recurrence, NOT benchmark-tuned): in scripts/mcp/atomic-edit/server.ts
+R34+R38 recurrence, NOT benchmark-tuned): in src/server.ts
 input schemas, accept natural synonyms by normalizing args at handler entry
 BEFORE zod-validation rejects them — `code_outline`/`code_read_symbol`/
 `code_browse` accept `path` as alias for `file`; `atomic_replace_text`
@@ -1836,7 +1836,7 @@ attack next sink (native Read ×6 = 58K; code_outline 5.4K×2), else if ≥2×
 
 **Blocker-unlock proven:** orchestrator session's atomic-edit MCP can die;
 fix = spawn a FRESH headless `claude -p` worker (its MCP loads at startup) to
-edit `scripts/mcp/atomic-edit/*.ts` via mcp__atomic-edit__* (mandated tool),
+edit `src/*.ts` via mcp__atomic-edit__* (mandated tool),
 then commit to `ab/atomic-harness`. Harness: `<your-repo>-ab/`
 `launch-tooldev` + `tooldev-task.txt` (atomic-only enforced; --max-turns 120).
 

@@ -277,9 +277,44 @@ const READ_ONLY_COMMANDS: RegExp[] = [
   /^node\s+scripts\/mcp\/atomic-edit\/audit-atomicity\.mjs\b/,
 ];
 
-function externalEffectReason(cmd: string): string | null {
+// Dev-validation tool runners: package-runner-fronted LOCAL dev/validation tools
+// (typecheckers, test runners, linters, formatters, bundler typecheck). These are
+// SAFE to admit as ordinary sandboxed filesystem-effect commands: the atomic exec
+// sandbox DENIES network, so a package runner cannot download/execute registry code
+// under it (it fails closed). The byte effect (e.g. a tsc/tsup emit) is still
+// snapshot-proven. This converts the blanket package-runner refusal into a
+// network-backed guarantee — exactly what lets Atomic VALIDATE modern JS/TS projects
+// (tsc/jest/vitest/eslint) instead of forcing a bash bypass.
+const DEV_VALIDATION_TOOLS = new Set<string>([
+  'tsc', 'vue-tsc', 'svelte-check', 'tsx', 'ts-node',
+  'vitest', 'jest', 'mocha', 'ava', 'playwright',
+  'eslint', 'prettier', 'biome', 'oxlint',
+  'esbuild', 'swc', 'tsup', 'rollup', 'vite', 'typedoc', 'c8', 'nyc',
+]);
+
+export function devValidationRunner(cmd: string): boolean {
+  const c = (cmd || '').trim();
+  const m = c.match(/^(?:npx|bunx|pnpm\s+dlx|yarn\s+dlx)\s+(.+)$/);
+  if (!m) return false;
+  const tokens = m[1].trim().split(/\s+/);
+  let i = 0;
+  // skip runner flags; --package/-p/--call/-c consume a following value
+  while (i < tokens.length && tokens[i].startsWith('-')) {
+    i += /^(?:-p|--package|--call|-c)$/.test(tokens[i]) ? 2 : 1;
+  }
+  const tool = tokens[i];
+  if (!tool) return false;
+  const base = tool.replace(/^.*\//, '').replace(/@[^/]*$/, '');
+  return DEV_VALIDATION_TOOLS.has(base);
+}
+
+export function externalEffectReason(cmd: string): string | null {
   if (!cmd || typeof cmd !== 'string') return null;
   const c = cmd.trim();
+  // A package-runner-fronted LOCAL dev/validation tool is not an external effect:
+  // the sandbox denies network (no registry download can occur), so it runs as an
+  // ordinary snapshot-proven filesystem-effect command instead of being refused.
+  if (devValidationRunner(c)) return null;
   const hit = EXTERNAL_OR_HOST_EFFECT_COMMANDS.find((entry) => entry.re.test(c));
   return hit?.reason ?? null;
 }

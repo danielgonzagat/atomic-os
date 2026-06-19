@@ -1,7 +1,7 @@
 # Atomic-Edit Operating Guide (read this every session)
 
 > Permanent operating instruction for any AI CLI working in this repo.
-> Companion to `docs/ai/AGENT_RUNBOOK.md`. Not protected; keep it accurate.
+> Companion to `docs/AGENT_RUNBOOK.md`. Not protected; keep it accurate.
 
 ## Why this exists
 
@@ -15,7 +15,7 @@ This is the **Line-Oriented Action Bottleneck**, confirmed by CodeStruct
 the Aider edit-format study, Diff-XYZ, and Kiro's program-analysis argument.
 
 This repo ships a fix: the **`atomic-edit` MCP server**
-(`scripts/mcp/atomic-edit/`), registered in `.mcp.json`, exposing a structured
+(`src/`), registered in `.mcp.json`, exposing a structured
 read + atomic-edit action space as `mcp__atomic-edit__*` tools.
 
 ## Operating rule
@@ -80,7 +80,7 @@ built-in `Edit` does not.
 ## Verify after touching the server
 
 ```sh
-npx tsx scripts/mcp/atomic-edit/smoke.ts   # expect: 47 passed, 0 failed
+node src/smoke.mjs   # expect: 47 passed, 0 failed
 ```
 
 ## Activation
@@ -100,10 +100,10 @@ npx tsx scripts/mcp/atomic-edit/smoke.ts   # expect: 47 passed, 0 failed
   only). Verify with `codex mcp list` (expect `atomic-edit … enabled`). Note:
   `~/.local/bin/codex` is a shim routing `codex exec`→OpenCode; the real Codex
   is `/opt/homebrew/bin/codex` and `codex mcp` targets the real config.
-- One shared tool, three CLIs — see `ATOMIC_EDIT_CLI_ACTIVATION_MATRIX.md`.
+One shared tool, three CLIs — see `docs/CLI_ACTIVATION_MATRIX.md`.
 
 Runtime is plain `node dist/server.js` (launcher self-builds on staleness; no
-tsx/npx). Full design + tool reference: `scripts/mcp/atomic-edit/README.md`.
+tsx/npx). Full design + tool reference: `src/README.md`.
 
 ---
 
@@ -126,7 +126,7 @@ Mandatory:
 - every code mutation via `mcp__atomic-edit__*`
 - the tool returns a compact human `summary` (✅ + file + `[-removed-]{+added+}`
   - validation + zeroCodeTrust + trace path) and persists the full
-    `AtomicEditTrace` to `docs/ai/traces/`
+    `AtomicEditTrace` to `.atomic/traces/`
 - the native TUI shows only the tool output
 - session end: `trace-coverage-audit.mjs` flags any code change with no trace
 
@@ -136,9 +136,9 @@ Default: **atomic tool or nothing.** Prose/`.md` and non-edit tools
 Enforcement wired:
 
 - Claude Code: `.claude/settings.json` PreToolUse →
-  `scripts/mcp/atomic-edit/atomic-only-hook.mjs` (denies native code edit +
+  `src/atomic-only-hook.mjs` (denies native code edit +
   shell in-place code mutation; tested). Stop →
-  `scripts/mcp/atomic-edit/trace-coverage-audit.mjs` (advisory; `--strict`
+  `src/trace-coverage-audit.mjs` (advisory; `--strict`
   for a hard CI gate). Activates on the next fresh session (hooks + MCP load
   at session start — documented limitation).
 - Codex: `[mcp_servers.atomic-edit]` in `~/.codex/config.toml` + the

@@ -8,14 +8,19 @@ describe('server-tools-exec helper functions', () => {
   it('bubblewrapArgs should generate expected sandbox parameters', () => {
     const effectRoot = path.resolve('.');
     const tempRoot = path.resolve('./tmpdir-check.tmp');
-    const args = bubblewrapArgs(effectRoot, tempRoot);
-
-    expect(args).toContain('--ro-bind');
-    expect(args).toContain('/');
-    expect(args).toContain('--unshare-net');
-    expect(args).toContain('--bind');
-    expect(args).toContain(fs.realpathSync(effectRoot));
-    expect(args).toContain(fs.realpathSync(tempRoot));
+    // Create the temporary directory so fs.realpathSync doesn't fail
+    fs.mkdirSync(tempRoot, { recursive: true });
+    try {
+      const args = bubblewrapArgs(effectRoot, tempRoot);
+      expect(args).toContain('--ro-bind');
+      expect(args).toContain('/');
+      expect(args).toContain('--unshare-net');
+      expect(args).toContain('--bind');
+      expect(args).toContain(fs.realpathSync(effectRoot));
+      expect(args).toContain(fs.realpathSync(tempRoot));
+    } finally {
+      fs.rmdirSync(tempRoot);
+    }
   });
 
   it('protectedEffectHits should detect edits to governance-protected files', () => {

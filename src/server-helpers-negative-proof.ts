@@ -91,7 +91,12 @@ export interface NegativeActionProofRequest {
   disproofWitness?: DisproofWitness;
 }
 
-const MIN_PROOF_CHARS = 20;
+/** Minimum proof length for ASSERTED (free-text, no witness) proofs. 
+ *  Witness-backed proofs (duplicate, gate-red) can be shorter because
+ *  the witness IS the machine-checked evidence. */
+const MIN_ASSERTED_PROOF_CHARS = 200;
+/** Minimum proof length when a DisproofWitness is provided. */
+const MIN_WITNESSED_PROOF_CHARS = 10;
 const sha256 = (value: string): string => crypto.createHash('sha256').update(value).digest('hex');
 
 export function removedByteCountBetween(before: string, after: string): number {
@@ -136,19 +141,71 @@ export function removedByteCountBetween(before: string, after: string): number {
   }
   return removed;
 }
+/**
+ * Extract significant tokens (>3 chars, alphanumeric) from a string.
+ * Used to verify that a free-text proof actually references the code it claims to disprove.
+ */
+function extractSignificantTokens(text: string): Set<string> {
+  const tokens = new Set<string>();
+  // Match identifiers, keywords, and significant substrings (>=4 chars, alphanumeric)
+  const re = /[a-zA-Z_]\w{3,}/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    tokens.add(m[0]);
+  }
+  return tokens;
+}
 
 export function requireNegativeActionProof(request: NegativeActionProofRequest): NegativeActionProof {
   const proof = (request.proofOfIncorrectness ?? '').trim();
-  if (proof.length < MIN_PROOF_CHARS) {
+  
+  // FASE-0.3 HARDENING: asserted proofs (no witness) require stronger evidence.
+  // A witness-backed proof needs only a short explanation because the witness IS the evidence.
+  // A free-text assertion must (a) be substantially longer and (b) reference at least one
+  // token from the removed code region — proving the agent actually examined what it removed.
+  const hasWitness = !!request.disproofWitness;
+  const minChars = hasWitness ? MIN_WITNESSED_PROOF_CHARS : MIN_ASSERTED_PROOF_CHARS;
+  
+  if (proof.length < minChars) {
+    const detail = hasWitness 
+      ? `provide proofOfIncorrectness (>=${minChars} chars) explaining why the affected bytes are non-correct/negative.`
+      : `provide proofOfIncorrectness (>=${minChars} chars) explaining why the affected bytes are non-correct/negative AND supply a DisproofWitness (duplicate|gate-red) for automatic verification, or write a detailed free-text justification referencing specific code tokens from the removed region.`;
     throw new Error(
       'refused: ' +
         request.action +
         ' is a negative byte action on ' +
         request.target +
-        '; provide proofOfIncorrectness (>=20 chars) explaining why the affected bytes are non-correct/negative. ' +
-        'Correct-by-construction bytes are immutable to negative actions.',
+        '; ' + detail +
+        ' Correct-by-construction bytes are immutable to negative actions.',
     );
   }
+  
+  // FASE-0.3: for ASSERTED proofs (no witness), require that the proof text references
+  // at least one significant token from the removed region. This prevents "this is wrong because I said so."
+  if (!hasWitness && request.before && request.after) {
+    const removed = removedRegion(request.before, request.after);
+    if (removed.length > 0) {
+      const removedTokens = extractSignificantTokens(removed);
+      const proofTokens = extractSignificantTokens(proof);
+      let foundMatch = false;
+      for (const rt of removedTokens) {
+        if (proofTokens.has(rt)) { foundMatch = true; break; }
+      }
+      if (!foundMatch && removedTokens.size > 0) {
+        throw new Error(
+          'refused: ' +
+            request.action +
+            ' is a negative byte action on ' +
+            request.target +
+            '; the free-text proofOfIncorrectness must reference at least one code token from the removed region ' +
+            '(e.g. function/variable name, string literal) to demonstrate you examined the code being removed. ' +
+            'Tokens found in removed region: ' + [...removedTokens].slice(0, 5).join(', ') + '. ' +
+            'Alternatively, supply a DisproofWitness (duplicate|gate-red) for automatic verification.',
+        );
+      }
+    }
+  }
+  
   const removedByteCount = Math.max(0, Math.floor(request.removedByteCount));
   if (removedByteCount <= 0) {
     throw new Error(
@@ -160,8 +217,7 @@ export function requireNegativeActionProof(request: NegativeActionProofRequest):
     );
   }
   // FASE-0.2 SEMANTIC TEETH: a DisproofWitness is RE-COMPUTED against the removed bytes; a witness
-  // that does NOT hold is a false disproof and is REFUSED (you cannot delete correct-by-construction
-  // bytes by typing 20 chars and asserting a duplicate that is not there). No witness ⇒ the receipt
+  // that does NOT hold is a false disproof and is REFUSED (the (a) teeth). No witness ⇒ the receipt
   // HONESTLY records witnessKind:'asserted'+recomputed:false — never faking a verified disproof.
   const verdict = recomputeDisproof(request.disproofWitness, request.before, request.after);
   if (request.disproofWitness && !verdict.ok) {

@@ -79,6 +79,7 @@ const ENTRY = [
   'gates/converge-operator.ts',
   'gates/corpus.ts',
   'gates/closure-universal.ts',
+  'gates/symbol-closure.ts',
   'gates/reachability-gate.proof.ts',
   'gates/binding-gate.proof.ts',
   'gates/property-gate.proof.ts',

@@ -59,6 +59,7 @@ import { registerToolsSelf } from './server-tools-self.js';
 import { registerToolsSelfEvolution } from './server-tools-self-evolution.js';
 import { registerToolsDisproof } from './server-tools-disproof.js';
 import { registerToolsChromeDevtools } from './server-tools-chrome-devtools.js';
+import { registerToolsEvolution } from './server-tools-evolution.js';
 
 type RegisteredToolForList = {
   title?: string;
@@ -201,6 +202,7 @@ registerToolsCodexConfig(server);
 registerToolsGit(server);
 registerToolsSelf(server);
 registerToolsSelfEvolution(server);
+registerToolsEvolution(server);
 registerToolsDisproof(server);
 registerToolsChromeDevtools(server);
 installCodexSafeToolList(server);
