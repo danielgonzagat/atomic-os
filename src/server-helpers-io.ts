@@ -18,6 +18,7 @@ import iacReferenceGate from './gates/iac-reference-gate.js';
 import securityGate from './gates/security-gate.js';
 import { makeContext, type GateModule } from './gates/contract.js';
 import { assertSelfExpansionAdmission } from './server-helpers-self-expansion.js';
+import { recordEmergenceEvent } from './emergence-feed.js';
 // ── self-improving Gate Lattice (GAP #2) — the ADMITTED registry gates, run additively at the byte floor ──
 // The frozen SYNC_WRITE_GATES above are atomic's BUILT-IN floor. The lattice lets
 // the system self-extend that floor: a gate detected from the "all-gates-passed vs
@@ -269,10 +270,14 @@ export function atomicWrite(absPath: string, content: string): void {
     }
     if (canUseBrokerAtomicWrite(e)) {
       writeAtomicBytesViaBroker(absPath, tmp, content, mode);
+      recordEmergenceEvent({ repoRoot, kind: 'edit', op: 'atomicWrite', file: relPath, before: priorBytes, after: content });
       return;
     }
     throw e;
   }
+  // LIVE emergence feed (PART D.6): every successful byte write feeds the
+  // observatory with a real, hash-chained event. Fail-safe — never blocks the write.
+  recordEmergenceEvent({ repoRoot, kind: 'edit', op: 'atomicWrite', file: relPath, before: priorBytes, after: content });
 }
 
 export function readUtf8(absPath: string): string {
