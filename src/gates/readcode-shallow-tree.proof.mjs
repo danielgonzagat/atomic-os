@@ -40,14 +40,14 @@ function sourceAssertions() {
   const readcode = read('scripts/mcp/atomic-edit/server-tools-readcode.ts');
   return {
     hasBoundedTreeConstants:
-      readcode.includes('const SHALLOW_TREE_DEPTH = 2') &&
+      readcode.includes('const SHALLOW_TREE_DEPTH = 3') &&
       readcode.includes('const SHALLOW_TREE_ENTRY_LIMIT = 80') &&
       readcode.includes('SHALLOW_TREE_SKIP'),
     hasTreeBuilder:
       readcode.includes('function readcodeDirectoryTree(') &&
       readcode.includes('function formatShallowTreeSummary('),
     directoryResponsesExposeTree:
-      readcode.includes('shallowTree: readcodeDirectoryTree('),
+      readcode.includes('const shallowTree = readcodeDirectoryTree(') && readcode.includes('shallowTree,'),
     toolDescriptionExplainsTree:
       readcode.includes('Directory → file listing + bounded shallow tree'),
   };
@@ -131,7 +131,7 @@ async function dynamicReadcodeProof() {
         ok:
           root.ok === true &&
           root.mode === 'directory' &&
-          root.shallowTree?.depth === 2 &&
+          root.shallowTree?.depth === 3 &&
           root.shallowTree?.entryLimit === 80 &&
           rootPaths.includes('src') &&
           rootPaths.includes('src/__tests__') &&
@@ -142,7 +142,7 @@ async function dynamicReadcodeProof() {
           srcPaths.includes('src/__tests__/workflow.test.ts') &&
           batch.ok === true &&
           batchTrees.length === 2 &&
-          batchTrees.every((tree) => tree.depth === 2 && tree.entryLimit === 80) &&
+          batchTrees.every((tree) => tree.depth === 3 && tree.entryLimit === 80) &&
           !treeHasBodyLeak(root.shallowTree) &&
           !treeHasBodyLeak(src.shallowTree),
         root,

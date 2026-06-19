@@ -213,6 +213,78 @@ export interface NodeAtPosition {
   text: string;
 }
 
+/** Resolve a sub-expression inside a named container (function/class/method). */
+export interface SubExprResult {
+  selector: string;
+  kind: string;
+  startLine: number;
+  startColumn: number;
+  endLine: number;
+  endColumn: number;
+  code: string;
+  containerSelector: string;
+  containerKind: string;
+}
+
+function findNamedInNode(containerNode: Node, name: string): { n: Node; kind: string } | null {
+  const walk = (nd: Node): { n: Node; kind: string } | null => {
+    const k = nd.getKindName();
+    const a = nd as unknown as { getName?: () => string | undefined; getText?: () => string; getChildren?: () => Node[] };
+    let gotName: string | undefined;
+    try { gotName = a.getName?.(); } catch { /* unnamed */ }
+    if (gotName === name) return { n: nd, kind: k };
+    if (k === 'Identifier') {
+      let txt = '';
+      try { txt = a.getText?.() ?? ''; } catch { /* ignore */ }
+      if (txt === name) return { n: nd, kind: k };
+    }
+    const ch = a.getChildren?.() ?? [];
+    for (const c of ch) {
+      const found = walk(c);
+      if (found) return found;
+    }
+    return null;
+  };
+  for (const child of containerNode.getChildren()) {
+    const found = walk(child);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** Resolve "Container.expr" as a sub-expression within a named container. */
+export function resolveSubExpression(
+  sf: SourceFile,
+  selector: string,
+): SubExprResult {
+  const parts = selector.split(/::|\./).map((s) => s.trim()).filter(Boolean);
+  if (parts.length < 2) throw new Error(`sub-expression selector requires container.expr: "${selector}"`);
+  const exprName = parts[parts.length - 1];
+  const containerSel = parts.slice(0, -1).join('.');
+  const resolved = resolveSymbol(sf, containerSel);
+  const result = findNamedInNode(resolved.node, exprName);
+  if (!result) {
+    throw new Error(`no "${exprName}" found inside "${containerSel}" (${resolved.info.kind})`);
+  }
+  const nd = result.n;
+  const start = nd.getStart();
+  const end = nd.getEnd();
+  const slp = nd.getStartLinePos();
+  const tbe = nd.getSourceFile().getFullText().slice(0, end);
+  const els = tbe.lastIndexOf('\n');
+  return {
+    selector: `${containerSel}.${exprName}`,
+    kind: result.kind,
+    startLine: nd.getStartLineNumber(),
+    startColumn: start - slp + 1,
+    endLine: nd.getEndLineNumber(),
+    endColumn: end - (els === -1 ? 0 : els + 1) + 1,
+    code: nd.getText(),
+    containerSelector: containerSel,
+    containerKind: resolved.info.kind,
+  };
+}
+
 export function resolveNodeAtPosition(sf: SourceFile, line: number, column: number): NodeAtPosition {
   let deepest: Node | undefined;
   let depth = -1;

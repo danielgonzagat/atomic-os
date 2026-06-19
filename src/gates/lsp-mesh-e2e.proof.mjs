@@ -29,7 +29,7 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const srcDir = path.resolve(here, '..');
 const repoRoot = path.resolve(srcDir, '..');
-const router = path.join(here, 'lsp-router.mjs');
+const router = path.join(srcDir, 'dist', 'gates', 'lsp-router.mjs');
 const jsonMode = process.argv.includes('--json');
 
 const results = [];
@@ -68,25 +68,48 @@ function skip(reason) {
 if (!fs.existsSync(router)) skip(`lsp-router.mjs not found at ${router}`);
 if (!serverResolvable()) skip('no typescript-language-server resolvable on PATH (npm i -g typescript-language-server)');
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /** Drive the real router for one diagnostics round-trip; returns the parsed result. */
-function routerDiagnostics(absFile, content, rootUri, timeoutMs = 25000) {
-  return new Promise((resolve) => {
-    const proc = spawn(process.execPath, [router, 'diagnostics', absFile, 'typescript'], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, PATH: augmentedPath },
-      timeout: timeoutMs,
+async function routerDiagnostics(absFile, content, rootUri, timeoutMs = 25000) {
+  let last = null;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    last = await new Promise((resolve) => {
+      const proc = spawn(process.execPath, [router, 'diagnostics', absFile, 'typescript'], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: { ...process.env, PATH: augmentedPath },
+        timeout: timeoutMs,
+      });
+      let out = '';
+      let err = '';
+      proc.stdout.on('data', (d) => { out += d.toString(); });
+      proc.stderr.on('data', (d) => { err += d.toString(); });
+      proc.on('error', (e) => resolve({ ok: false, attempt, error: e.message, stdoutBytes: out.length, stderr: err.slice(0, 500) }));
+      proc.on('close', (code, signal) => {
+        try { resolve({ ...JSON.parse(out), attempt }); }
+        catch {
+          resolve({
+            ok: false,
+            attempt,
+            code,
+            signal,
+            stdoutBytes: out.length,
+            stderr: err.slice(0, 500),
+            error: `unparseable router output: ${out.slice(0, 200)}`,
+          });
+        }
+      });
+      proc.stdin.write(JSON.stringify({ content, rootUri, language: 'typescript', uri: `file://${absFile}` }));
+      proc.stdin.end();
     });
-    let out = '';
-    proc.stdout.on('data', (d) => { out += d.toString(); });
-    proc.stderr.on('data', () => {});
-    proc.on('error', (e) => resolve({ ok: false, error: e.message }));
-    proc.on('close', () => {
-      try { resolve(JSON.parse(out)); }
-      catch { resolve({ ok: false, error: `unparseable router output: ${out.slice(0, 200)}` }); }
-    });
-    proc.stdin.write(JSON.stringify({ content, rootUri }));
-    proc.stdin.end();
-  });
+    if (last.ok === true || last.stdoutBytes !== 0 || attempt === 2) return last;
+    await sleep(300);
+  }
+  return last;
+}
+
+function diagnosticsOf(result) {
+  return result?.diagnostics ?? result?.data?.diagnostics ?? [];
 }
 
 async function main() {
@@ -99,7 +122,7 @@ async function main() {
     const badSrc = 'const offender: number = "definitely not a number";\nexport {};\n';
     fs.writeFileSync(badPath, badSrc);
     const bad = await routerDiagnostics(badPath, badSrc, rootUri);
-    const badErrors = (bad.diagnostics || []).filter((d) => d.severity === 1);
+    const badErrors = diagnosticsOf(bad).filter((d) => d.severity === 1);
     check(
       'REAL language server reports a severity-1 diagnostic for a genuine type error',
       bad.ok === true && badErrors.length >= 1,
@@ -115,7 +138,7 @@ async function main() {
     const goodSrc = 'export const fine: number = 42;\nexport const label: string = "ok";\n';
     fs.writeFileSync(goodPath, goodSrc);
     const good = await routerDiagnostics(goodPath, goodSrc, rootUri);
-    const goodErrors = (good.diagnostics || []).filter((d) => d.severity === 1);
+    const goodErrors = diagnosticsOf(good).filter((d) => d.severity === 1);
     check(
       'REAL language server reports ZERO severity-1 diagnostics for type-valid code',
       good.ok === true && goodErrors.length === 0,

@@ -31,7 +31,14 @@ import { fileURLToPath } from 'node:url';
 
 const jsonMode = process.argv.includes('--json');
 const dir = path.dirname(fileURLToPath(import.meta.url));            // gates/
-const router = path.join(dir, 'lsp-router.mjs');                     // the real write-path router
+const sourceDir = path.resolve(dir, '..');                           // atomic-edit/
+const router = path.join(sourceDir, 'dist', 'gates', 'lsp-router.mjs'); // the real built write-path router
+const routerAvailable = fs.existsSync(router);
+const binDirs = [
+  path.join(sourceDir, 'node_modules', '.bin'),
+  path.join(path.resolve(sourceDir, '..'), 'node_modules', '.bin'),
+].filter((d) => fs.existsSync(d));
+const augmentedPath = [...binDirs, process.env.PATH || ''].join(path.delimiter);
 
 let pass = 0;
 let fail = 0;
@@ -71,7 +78,7 @@ function descendants(rootPid, re) {
 }
 const LS_RE = /typescript-language-server|tsserver\.js/;
 const CANARY = 'ATOMIC_RT_LEAK_CANARY';
-const hasLS = spawnSync('typescript-language-server', ['--version'], { encoding: 'utf8' }).status === 0;
+const hasLS = spawnSync('typescript-language-server', ['--version'], { encoding: 'utf8', env: { ...process.env, PATH: augmentedPath } }).status === 0;
 
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'atomic-rt-proof-'));
 const tsFile = path.join(work, 'probe.ts');
@@ -111,29 +118,44 @@ try {
   // still leaves zero orphans here — empirically verified.) The real ~242-proc leak was
   // the socket-driven broker, which has no EOF trigger; RT-REAP below is its discriminating
   // test against the production parent-death reaper.
-  if (!psAvailable || !hasLS) {
-    check('RT-REAL: SKIPPED — process table or language server unavailable (honest unjudged)', true,
-      { skipped: true, psAvailable, hasLS });
+  if (!routerAvailable || !psAvailable || !hasLS) {
+    check('RT-REAL: SKIPPED — router, process table, or language server unavailable (honest unjudged)', true,
+      { skipped: true, routerAvailable, router, psAvailable, hasLS });
   } else {
     const content = fs.readFileSync(tsFile, 'utf8');
     const stdin = JSON.stringify({ content, rootUri: `file://${path.dirname(tsFile)}` });
-    async function driveAndCheck(sigterm) {
-      const proc = spawn('node', [router, 'diagnostics', tsFile, 'typescript'], { stdio: ['pipe', 'pipe', 'pipe'] });
+    async function driveAndCheck(label, sigterm) {
+      const proc = spawn('node', [router, 'diagnostics', tsFile, 'typescript'], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: { ...process.env, PATH: augmentedPath },
+      });
+      const closePromise = new Promise((res) => {
+        proc.on('close', (code, signal) => res({ code, signal, timeout: false }));
+      });
       try { proc.stdin.write(stdin); proc.stdin.end(); } catch { /* */ }
-      let out = ''; proc.stdout.on('data', (d) => { out += d.toString(); }); proc.stderr.on('data', () => {});
+      let out = '';
+      let err = '';
+      proc.stdout.on('data', (d) => { out += d.toString(); });
+      proc.stderr.on('data', (d) => { err += d.toString(); });
       let ls = null;
       for (let i = 0; i < 90 && ls === null; i += 1) {
-        await sleep(50); const d = descendants(proc.pid, LS_RE); if (d.length) ls = d[0];
+        await sleep(50);
+        const d = descendants(proc.pid, LS_RE);
+        if (d.length) ls = d[0];
         if (sigterm && ls !== null) { try { proc.kill('SIGTERM'); } catch { /* */ } }
       }
-      await new Promise((res) => proc.on('close', () => res()));
-      return { ls, ok: /"ok":true/.test(out) };
+      const closed = await Promise.race([
+        closePromise,
+        sleep(7000).then(() => ({ code: null, signal: null, timeout: true })),
+      ]);
+      if (closed.timeout) killPid(proc.pid, false);
+      return { ls, ok: /"ok":true/.test(out), code: closed.code, signal: closed.signal, timeout: closed.timeout, stderr: err.slice(0, 500), label };
     }
-    const r1 = await driveAndCheck(false);
+    const r1 = await driveAndCheck('normal', false);
     check('RT-REAL/normal: router answers (functionality intact)', r1.ok, { ok: r1.ok });
     if (r1.ls) { await sleep(2500); check('RT-REAL/normal: ZERO orphaned LS child after normal exit', !alive(r1.ls), { lsPid: r1.ls }); if (alive(r1.ls)) killPid(r1.ls); }
     else check('RT-REAL/normal: no orphaned LS child', true, { lsPid: null });
-    const r3 = await driveAndCheck(true);
+    const r3 = await driveAndCheck('sigterm', true);
     if (r3.ls) { await sleep(2500); check('RT-REAL/sigterm: ZERO orphaned LS child after gate-timeout SIGTERM', !alive(r3.ls), { lsPid: r3.ls }); if (alive(r3.ls)) killPid(r3.ls); }
     else check('RT-REAL/sigterm: no orphaned LS child', true, { lsPid: null });
   }

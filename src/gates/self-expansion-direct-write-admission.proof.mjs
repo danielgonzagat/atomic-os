@@ -11,8 +11,8 @@ function indexOfRequired(source, needle) {
   return index >= 0 ? index : Number.POSITIVE_INFINITY;
 }
 
-const admissionCall = 'assertSelfExpansionAdmission(REPO_ROOT, absPath, content);';
-const firstPhysicalWrite = "const fd = fs.openSync(tmp, 'w');";
+const admissionCall = 'assertSelfExpansionAdmission(repoRoot, absPath, content);';
+const firstPhysicalWrite = 'writeAtomicBytesDirect(absPath, tmp, content, mode);';
 const admissionImport = "import { assertSelfExpansionAdmission } from './" + "server-helpers-self-expansion.js';";
 
 const checks = [

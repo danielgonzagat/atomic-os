@@ -189,7 +189,7 @@ export async function partBSetup(ctx: PartBCtx): Promise<void> {
           adaptiveBatchReadBody.failed === 0 &&
           fullRead?.content === batchReadSource &&
           fullRead?.fileSha256 === sha(batchReadSource) &&
-          fullRead?.symbols?.some((entry: { selector?: string }) => entry.selector === 'alphaSymbol') &&
+          fullRead?.symbolSelectors?.some((selector: string) => selector === 'alphaSymbol') &&
           symbolRead?.code?.includes('return input.toUpperCase()') &&
           !symbolRead?.code?.includes('alphaSymbol') &&
           !('content' in adaptiveBatchReadBody),
@@ -285,7 +285,7 @@ export async function partBSetup(ctx: PartBCtx): Promise<void> {
         goal: 'fazer o chat do admin persistir mensagens em Postgres',
         outputFile: intentConvergeRel,
       },
-    })) as { content: { text: string }[] };
+    }, undefined, { timeout: 240000 })) as { content: { text: string }[] };
     const intentConvergeBody = jsonBody(intentConverge);
     check(
       'intent converge generates a green product-contract preview without writing',

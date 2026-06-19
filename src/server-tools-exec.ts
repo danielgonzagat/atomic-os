@@ -317,6 +317,54 @@ function sandboxExecUsable(): boolean {
   return sandboxExecUsableCache;
 }
 
+const BWRAP_EXEC = 'bwrap';
+let bwrapUsableCache: boolean | null = null;
+
+export function bwrapAvailable(): boolean {
+  try {
+    const res = childProcess.spawnSync('command', ['-v', BWRAP_EXEC], { shell: true });
+    return res.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+export function bwrapUsable(): boolean {
+  if (!bwrapAvailable()) return false;
+  if (bwrapUsableCache !== null) return bwrapUsableCache;
+  const probe = childProcess.spawnSync(
+    BWRAP_EXEC,
+    ['--ro-bind', '/', '/', '--unshare-net', '--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp', '/bin/bash', '-c', 'true'],
+    {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      timeout: 5000,
+      maxBuffer: 1024 * 1024,
+    },
+  );
+  bwrapUsableCache = probe.status === 0;
+  return bwrapUsableCache;
+}
+
+export function bubblewrapArgs(effectRoot: string | null, tempRoot: string | null): string[] {
+  const args = [
+    '--ro-bind', '/', '/',
+    '--unshare-net',
+    '--dev', '/dev',
+    '--proc', '/proc',
+    '--tmpfs', '/tmp',
+  ];
+  if (effectRoot) {
+    const r = fs.realpathSync(effectRoot);
+    args.push('--bind', r, r);
+  }
+  if (tempRoot) {
+    const t = fs.realpathSync(tempRoot);
+    args.push('--bind', t, t);
+  }
+  return args;
+}
+
 function sandboxPath(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
@@ -385,7 +433,7 @@ function sandboxReceipt(
 ): Record<string, unknown> {
   return {
     active,
-    engine: active ? 'macos-sandbox-exec' : 'none',
+    engine: active ? (process.platform === 'linux' ? 'linux-bubblewrap' : 'macos-sandbox-exec') : 'none',
     writeRoot,
     fileWrites: active ? (writeRoot ? 'effectRoot+scratch-only' : 'denied') : 'unguarded',
     tempRoot: active ? tempRoot : null,
@@ -395,7 +443,8 @@ function sandboxReceipt(
 
 function hostSandboxActive(): boolean {
   return (
-    process.env.ATOMIC_HOST_SANDBOX === 'macos-sandbox-exec' &&
+    (process.env.ATOMIC_HOST_SANDBOX === 'macos-sandbox-exec' ||
+     process.env.ATOMIC_HOST_SANDBOX === 'linux-bubblewrap') &&
     process.env.ATOMIC_HOST_ATOMIC_ONLY === '1'
   );
 }
@@ -462,7 +511,7 @@ function brokerSandboxReceipt(
 ): Record<string, unknown> {
   return {
     active: true,
-    engine: 'macos-broker-sandbox',
+    engine: process.platform === 'linux' ? 'linux-broker-sandbox' : 'macos-broker-sandbox',
     writeRoot,
     fileWrites: writeRoot ? 'effectRoot+scratch-only' : 'denied',
     tempRoot,
@@ -562,6 +611,10 @@ function runViaBroker(
     tempRoot: brokerTempRoot,
     timeoutMs,
   };
+  const workspaceRoot = activeWorkspaceRoot();
+  if (workspaceRoot && workspaceRoot !== REPO_ROOT) {
+    reqObj.workspaceRoot = workspaceRoot;
+  }
   if (env) reqObj.env = env;
   if (stdin !== undefined) reqObj.stdin = stdin;
   const res = childProcess.spawnSync(process.execPath, [clientPath, sockPath], {
@@ -891,7 +944,7 @@ export function registerToolsExec(server: McpServer): void {
     {
       title: 'Run a shell/git/gh/npm command inside the atomic envelope',
       description:
-        'The universal computational-action operator: runs an arbitrary command line via /bin/bash -c, ' +
+        'The universal computational-action operator: omit proveEffect for normal validation; mutable-or-unknown commands auto-prove byte effects; explicit proveEffect:false is refused; runs an arbitrary command line via /bin/bash -c, ' +
         'wrapped in the atomic envelope — a starting-directory guard (cwd must resolve inside the repo ' +
         'root / a registered git worktree), a host sandbox where available (macOS sandbox-exec: no writes ' +
         'for trace-only commands; effectRoot+scratch-only writes for byte-effect-proven commands; network denied; ' +
@@ -1070,13 +1123,13 @@ export function registerToolsExec(server: McpServer): void {
           });
           return fail(`atomic_exec refused (broker required): ${reason}`);
         }
-        const directSandboxActive = sandboxExecUsable();
+        const directSandboxActive = process.platform === 'linux' ? bwrapUsable() : sandboxExecUsable();
         const useBroker = hostSandbox || (!directSandboxActive && Boolean(brokerSock));
         const sandboxActive = useBroker ? Boolean(brokerSock) : directSandboxActive;
         if (!sandboxActive) {
           const reason =
             'atomic_exec requires a real process sandbox under Y admission; ' +
-            `${SANDBOX_EXEC} is unavailable or sandbox_apply is denied in this process, and no live broker endpoint was recovered.`;
+            `${process.platform === 'linux' ? BWRAP_EXEC : SANDBOX_EXEC} is unavailable or sandbox_apply is denied in this process, and no live broker endpoint was recovered.`;
           appendTrace({
             ts: startedAt,
             kind: 'refused',
@@ -1105,18 +1158,31 @@ export function registerToolsExec(server: McpServer): void {
                 { ...(a.env ?? {}), ...sandboxEnv },
                 a.stdin,
               )
-            : (childProcess.spawnSync(
-                SANDBOX_EXEC,
-                ['-p', atomicSandboxProfile(sandboxWriteRoot, sandboxTempRoot), '/bin/bash', '-c', a.command],
-                {
-                  cwd,
-                  timeout,
-                  encoding: 'utf8',
-                  maxBuffer: 32 * 1024 * 1024,
-                  env: { ...process.env, ...(a.env ?? {}), ...sandboxEnv },
-                  ...(a.stdin !== undefined ? { input: a.stdin } : {}),
-                },
-              ) as unknown as SpawnLikeResult);
+            : (process.platform === 'linux'
+                ? (childProcess.spawnSync(
+                    BWRAP_EXEC,
+                    [...bubblewrapArgs(sandboxWriteRoot, sandboxTempRoot), '/bin/bash', '-c', a.command],
+                    {
+                      cwd,
+                      timeout,
+                      encoding: 'utf8',
+                      maxBuffer: 32 * 1024 * 1024,
+                      env: { ...process.env, ...(a.env ?? {}), ...sandboxEnv },
+                      ...(a.stdin !== undefined ? { input: a.stdin } : {}),
+                    },
+                  ) as unknown as SpawnLikeResult)
+                : (childProcess.spawnSync(
+                    SANDBOX_EXEC,
+                    ['-p', atomicSandboxProfile(sandboxWriteRoot, sandboxTempRoot), '/bin/bash', '-c', a.command],
+                    {
+                      cwd,
+                      timeout,
+                      encoding: 'utf8',
+                      maxBuffer: 32 * 1024 * 1024,
+                      env: { ...process.env, ...(a.env ?? {}), ...sandboxEnv },
+                      ...(a.stdin !== undefined ? { input: a.stdin } : {}),
+                    },
+                  ) as unknown as SpawnLikeResult));
         } finally {
           removeSandboxTempRoot(sandboxTempRoot);
         }

@@ -67,6 +67,7 @@ const CHECKS = [
   { prop: 'P-agent', label: 'substrate-independence: Claude/Codex/OpenCode obey the identical floor', cmd: 'node gates/agent-independence.proof.mjs --json' },
   { prop: 'P5+P6', label: 'monotonic admission + ratchet: coverage only grows', cmd: 'node gates/coverage-ratchet.proof.mjs --json' },
   { prop: 'lattice', label: 'the mandatory validator lattice is internally consistent', cmd: 'node gates/self-expansion-validator-lattice.proof.mjs --json' },
+  { prop: 'sc-sync', label: 'supply-chain resolver duplication is drift-guarded (inline copy == canonical sets)', cmd: 'node gates/supply-chain-resolver-sync.proof.mjs --json' },
   // ── PART C U1: the verified-edit ALGEBRA core, unified into the one command ──
   { prop: 'P7-alg', label: 'obligation-preserving confluence: runtime commute() == proven predicate', cmd: 'node gates/algebra.proof.mjs && node gates/algebra-refinement.proof.mjs' },
   { prop: 'P7-z3', label: 'obligation-preserving confluence: Z3 theorem (all configs + N-way reduce/step)', cmd: `python3 "${path.join(ALG, 'confluence_z3.py')}" && python3 "${path.join(ALG, 'nway_induction_z3.py')}"`, requires: 'python3', present: HAVE_PY, skipNote: 'z3/python3 absent — committed Z3 proof formal/atomic-algebra/{confluence_z3,nway_induction_z3}.py (ALL GREEN at authoring)' },
@@ -75,6 +76,8 @@ const CHECKS = [
   { prop: 'P8', label: 'disproof-as-recomputable-signal: teeth + consumer + briefing', cmd: 'node gates/negative-proof-teeth.proof.mjs && node gates/self-evolution-disproof-consumer.proof.mjs --json && node gates/self-evolution-disproof-briefing.proof.mjs --json' },
   // ── PART F: the universal truth funnel (the second emergent property) ──
   { prop: 'P9+P10', label: 'truth-funnel: verifier-gated answers + byte-positive monotone convergence (mechanism)', cmd: 'node gates/truth-funnel.proof.mjs --json' },
+  // ── hardening campaign (2026-06-18): discriminating regression proof for the 14 defect fixes ──
+  { prop: 'H-fixes', label: 'session hardening fixes hold (negative-byte multiset, RCE safeRequire, routing, outline, wasm-guard, trace-gc, .atomic guard)', cmd: 'node gates/session-fixes-regression.proof.mjs' },
   { prop: 'P1', label: 'the production write path is green end-to-end (47 smoke checks)', cmd: 'node smoke.mjs' },
 ];
 

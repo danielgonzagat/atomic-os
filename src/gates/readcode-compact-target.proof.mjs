@@ -74,7 +74,7 @@ function sourceAssertions() {
     readcodeDirectoryBatchNextUsesShallowTree:
       readcode.includes('function collectShallowTreeFiles') &&
       readcode.includes('readcodeBatchNextForDirectory(dir, entries, shallowTree)') &&
-      readcode.includes('Directory exposes a small file cluster in its shallow tree'),
+      readcode.includes('Directory exposes a small source/test file cluster in its shallow tree'),
     readcodeDirectoryInlinesSmallFiles:
       readcode.includes('DIRECTORY_INLINE_CONTEXT_BUDGET = 14000') &&
       readcode.includes('DIRECTORY_INLINE_FILE_LIMIT = 6') &&

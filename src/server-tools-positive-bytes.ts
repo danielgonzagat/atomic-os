@@ -2,6 +2,7 @@ import * as childProcess from 'node:child_process';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import * as ts from 'typescript';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { applyEdits } from './engine.js';
@@ -186,6 +187,25 @@ function findNearestTsconfig(absPath: string, repoRoot: string): string | null {
   }
 }
 
+function normalizeTsconfigPathForCompare(filePath: string): string {
+  const normalized = path.normalize(path.resolve(filePath));
+  return ts.sys.useCaseSensitiveFileNames ? normalized : normalized.toLowerCase();
+}
+
+function tsconfigIncludesTarget(tsconfigPath: string, targetAbsPath: string): boolean {
+  const configFile = ts.readConfigFile(tsconfigPath, ts.sys.readFile);
+  if (configFile.error) return false;
+  const parsed = ts.parseJsonConfigFileContent(
+    configFile.config,
+    ts.sys,
+    path.dirname(tsconfigPath),
+    undefined,
+    tsconfigPath,
+  );
+  const target = normalizeTsconfigPathForCompare(targetAbsPath);
+  return parsed.fileNames.some((fileName) => normalizeTsconfigPathForCompare(fileName) === target);
+}
+
 function findNearestNodeModules(startDir: string): string | null {
   let dir = path.resolve(startDir);
   const stop = path.resolve(REPO_ROOT);
@@ -297,6 +317,20 @@ function runPreDiskTypecheck(
     const shadowTarget = path.join(shadowProjectRoot, targetRelToProject);
     fs.mkdirSync(path.dirname(shadowTarget), { recursive: true });
     atomicWrite(shadowTarget, content);
+    const shadowTsconfig = path.join(shadowProjectRoot, tsconfigRelToProject);
+    if (!tsconfigIncludesTarget(shadowTsconfig, shadowTarget)) {
+      return {
+        kind: 'typecheck',
+        command: 'typecheck',
+        replayCwd: REPO_ROOT,
+        replayArgv: [],
+        targetRelPath: session.relPath,
+        passed: false,
+        preDisk: true,
+        strategy: 'uncovered',
+        summary: `uncovered: ${path.relative(REPO_ROOT, tsconfig)} does not include ${session.relPath}; declared typecheck cannot be proven pre-disk`,
+      };
+    }
     const tscBin = resolveLocalBin(projectRoot, 'tsc');
     childProcess.execFileSync(tscBin, replayArgv, {
       cwd: shadowProjectRoot,

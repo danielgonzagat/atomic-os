@@ -133,16 +133,16 @@ try {
     check('(4) GREEN: atomicWrite created the parent directory and wrote bytes', fs.readFileSync(nestedAbs, 'utf8') === 'export const nested: number = 7;\n');
   }
 
-  // (5) UNJUDGED blocks — write a file in a dir with NO resolvable tsconfig up to
-  //     REPO_ROOT-relative path: type-soundness bails unjudged. Under Y, an honest
-  //     cannot-decide is not green approval, so the byte is refused before disk.
+  // (5) No local tsconfig still blocks — if the repo root tsconfig can judge the
+  //     overlay, type-soundness returns RED; otherwise it returns UNJUDGED. Under Y,
+  //     neither state is allowed to write bytes before convergence is proven green.
   {
     fs.rmSync(path.join(proj, 'tsconfig.json'));
     const cAbs = path.join(proj, 'c.ts');
     // c.ts has no relative imports (connection green), no bare deps (supply-chain green); the
-    // only applicable rung is type-soundness, which is now unjudged (no tsconfig) and must block.
+    // relevant rung is type-soundness, which must block as either RED or UNJUDGED before disk.
     const msg = threw(() => atomicWrite(cAbs, 'export const y: number = nope();\n'));
-    check('(5) UNJUDGED at floor: no-tsconfig write is refused before disk', !!msg && /UNJUDGED|unjudged/.test(msg) && !fs.existsSync(cAbs));
+    check('(5) RED/UNJUDGED at floor: no-local-tsconfig write is refused before disk', !!msg && /type-soundness|UNJUDGED|unjudged/.test(msg) && !fs.existsSync(cAbs));
   }
 
   // (5) PATH ALIAS @/ at the byte floor — the new alias resolution (closes the #2 TODO).

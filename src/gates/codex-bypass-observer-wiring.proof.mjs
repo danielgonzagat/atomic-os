@@ -6,8 +6,11 @@ import { fileURLToPath } from 'node:url';
 
 const jsonMode = process.argv.includes('--json');
 const sourceDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const repoRoot = path.resolve(sourceDir, '..');
-const fixtureRoot = path.join(sourceDir, '.proof-codex-bypass-observer');
+const repoRoot = path.resolve(sourceDir, '..', '..', '..');
+const fixtureRoot = path.join(
+  sourceDir,
+  `.proof-codex-bypass-observer-${process.pid}-${process.hrtime.bigint().toString(36)}`,
+);
 
 const deniedNativeEditEvent = {
   tool_name: 'Write',

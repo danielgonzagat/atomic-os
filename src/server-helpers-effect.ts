@@ -62,6 +62,8 @@ const REPO_SCRATCH_PREFIXES = [
   '.proof-',
   '.smoke-',
   '.self-expansion-',
+  '.self-evolution-harness-input.',
+  '.self-evolution-harness-output.',
   '.security-mono-proof-',
   '.property-proof-',
   '.findings-',

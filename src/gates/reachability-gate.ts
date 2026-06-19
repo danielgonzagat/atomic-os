@@ -278,7 +278,7 @@ function reachableFromRoots(universe: string[], forward: Map<string, Set<string>
   return reached;
 }
 
-const MAX_UNIVERSE = 12000;
+const MAX_UNIVERSE = 25000;
 
 const reachabilityGate: GateModule = {
   name: 'reachability',

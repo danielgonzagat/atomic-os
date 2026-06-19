@@ -136,7 +136,15 @@ function liveBrokerEndpoint(value) {
   if (!endpoint) return null;
   if (endpoint.startsWith('file://')) {
     try {
-      return fs.existsSync(path.join(fileURLToPath(endpoint), 'requests')) ? endpoint : null;
+      const dir = fileURLToPath(endpoint);
+      const marker = JSON.parse(fs.readFileSync(path.join(dir, 'broker.json'), 'utf8'));
+      if (marker?.protocol !== 'atomic-file-broker-v1' || !Number.isInteger(marker?.pid) || marker.pid <= 1) return null;
+      try {
+        process.kill(marker.pid, 0);
+      } catch (error) {
+        if (error?.code !== 'EPERM') return null;
+      }
+      return fs.existsSync(path.join(dir, 'requests')) && fs.existsSync(path.join(dir, 'responses')) ? endpoint : null;
     } catch {
       return null;
     }
@@ -148,7 +156,17 @@ function liveBrokerEndpoint(value) {
   }
 }
 
+function mayUseSharedBrokerState() {
+  return (
+    Boolean(process.env.ATOMIC_EXEC_BROKER_SOCKET) ||
+    process.env.ATOMIC_HOST_SANDBOX === 'macos-sandbox-exec' ||
+    process.env.ATOMIC_HOST_ATOMIC_ONLY === '1' ||
+    process.env.ATOMIC_USE_BROKER_STATE === '1'
+  );
+}
+
 function stateBrokerEndpoint() {
+  if (!mayUseSharedBrokerState()) return null;
   const candidates = new Set();
   for (const value of [process.env.ATOMIC_HOST_WRITE_ROOT, process.env.CODEX_PROJECT_DIR, repoRoot]) {
     if (value) candidates.add(path.resolve(value));
@@ -169,16 +187,10 @@ function stateBrokerEndpoint() {
 }
 
 function inheritedBrokerEndpoint() {
-  const endpoint = liveBrokerEndpoint(process.env.ATOMIC_EXEC_BROKER_SOCKET) ?? stateBrokerEndpoint();
-  if (!endpoint) return null;
-  if (
-    process.env.ATOMIC_HOST_SANDBOX === 'macos-sandbox-exec' ||
-    process.env.ATOMIC_HOST_ATOMIC_ONLY === '1' ||
-    stateBrokerEndpoint()
-  ) {
-    return endpoint;
-  }
-  return null;
+  const explicit = liveBrokerEndpoint(process.env.ATOMIC_EXEC_BROKER_SOCKET);
+  if (explicit) return explicit;
+  if (!mayUseSharedBrokerState()) return null;
+  return stateBrokerEndpoint();
 }
 
 function brokerStateHostRoot(endpoint) {
@@ -191,17 +203,19 @@ function brokerStateHostRoot(endpoint) {
     const index = endpoint.indexOf(marker);
     if (index > 0) candidates.add(endpoint.slice(0, index));
   }
-  for (const root of candidates) {
-    const statePath = path.join(root, '.atomic', 'codex-broker-current.json');
-    try {
-      const payload = JSON.parse(fs.readFileSync(statePath, 'utf8'));
-      if (payload?.agent === 'codex' && typeof payload.repoRoot === 'string') {
-        if (!endpoint || typeof payload.socket !== 'string' || path.resolve(payload.socket) === path.resolve(endpoint)) {
-          return path.resolve(payload.repoRoot);
+  if (mayUseSharedBrokerState()) {
+    for (const root of candidates) {
+      const statePath = path.join(root, '.atomic', 'codex-broker-current.json');
+      try {
+        const payload = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+        if (payload?.agent === 'codex' && typeof payload.repoRoot === 'string') {
+          if (!endpoint || typeof payload.socket !== 'string' || path.resolve(payload.socket) === path.resolve(endpoint)) {
+            return path.resolve(payload.repoRoot);
+          }
         }
+      } catch {
+        // Broker state is optional outside inherited host sessions.
       }
-    } catch {
-      // Broker state is optional outside inherited host sessions.
     }
   }
   return process.env.ATOMIC_HOST_WRITE_ROOT ? path.resolve(process.env.ATOMIC_HOST_WRITE_ROOT) : repoRoot;
@@ -240,7 +254,7 @@ function startBroker() {
       }
     });
     const poll = setInterval(() => {
-      if (stdout.includes('ATOMIC_BROKER_READY') && fs.existsSync(path.join(brokerDir, 'requests'))) {
+      if (stdout.includes('ATOMIC_BROKER_READY') && fs.existsSync(path.join(brokerDir, 'broker.json'))) {
         clearTimeout(deadline);
         clearInterval(poll);
         resolve({ proc, endpoint, brokerDir, stdout, stderr });

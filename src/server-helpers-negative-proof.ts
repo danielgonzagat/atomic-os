@@ -115,7 +115,26 @@ export function removedByteCountBetween(before: string, after: string): number {
     beforeEnd -= 1;
     afterEnd -= 1;
   }
-  return Math.max(0, beforeEnd - start);
+  // The changed "before middle" [start,beforeEnd) is NOT all removed: bytes that are
+  // reproduced in the changed "after middle" [start,afterEnd) were MOVED/WRAPPED/GROWN,
+  // not deleted. Counting the whole middle as removed mis-flagged pure growth
+  // (move_into_scope), pure permutation (reorder_list) and wrap as negative byte actions,
+  // making those tools un-committable. Faithful to the (a) doctrine — replacing/deleting
+  // correct bytes still requires a disproof — we count ONLY the bytes present in the before
+  // middle that the after middle does not cover (byte multiset difference). Pure
+  // growth/wrap (afterMid ⊇ beforeMid) and pure permutation (same multiset) ⇒ 0 removed;
+  // genuine deletion/replacement (chars vanish) ⇒ still > 0, teeth intact.
+  if (beforeEnd <= start) return 0;
+  const afterCounts = new Int32Array(256);
+  for (let i = start; i < afterEnd; i += 1) afterCounts[afterBytes[i]] += 1;
+  const beforeCounts = new Int32Array(256);
+  for (let i = start; i < beforeEnd; i += 1) beforeCounts[beforeBytes[i]] += 1;
+  let removed = 0;
+  for (let v = 0; v < 256; v += 1) {
+    const deficit = beforeCounts[v] - afterCounts[v];
+    if (deficit > 0) removed += deficit;
+  }
+  return removed;
 }
 
 export function requireNegativeActionProof(request: NegativeActionProofRequest): NegativeActionProof {

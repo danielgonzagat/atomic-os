@@ -164,7 +164,8 @@ export async function renameSymbolCrossFile(
     throw new Error(`invalid identifier: ${JSON.stringify(newName)}`);
   }
   if (!TS_EXT.has(extOf(absFile))) {
-    throw new Error(lspRequirementMessage(extToGrammar(extOf(absFile)) ?? extOf(absFile), 'rename_symbol_cross_file'));
+    const { renameSymbolCrossFileNative } = await import('./engine-rename-native.js');
+    return renameSymbolCrossFileNative(absFile, repoRoot, line, column, newName);
   }
   const tsconfig = findNearestTsconfig(absFile, repoRoot);
   const { Project } = await import('ts-morph');

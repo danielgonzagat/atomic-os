@@ -273,9 +273,8 @@ export function registerBatchTools(server: McpServer): void {
     {
       title: 'Batch exact-text replacements in one atomic transaction',
       description:
-        'Apply 1-N exact oldText->newText replacements across one or more files as one macro-atomic transaction. ' +
-        'Use this before serial micro-edits whenever one coherent intent has multiple known spans, including ' +
-        'insertions expressible as exact contextual replacements. This is the fast path for clustered edits that ' +
+        'Apply 1-N exact oldText->newText replacements across one or more files as one coherent intent, avoiding serial micro-edits; auto-derives proof from the macro plan. ' +
+        'This is the fast path for clustered edits that ' +
         'would otherwise require many atomic_replace_text/insert calls and repeated validation/receipt cycles. ' +
         'Every target is resolved through the active workspace guard, every file is sha-guarded when requested, ' +
         'all replacements are validated in memory before any write, and commit returns one compact receipt while ' +

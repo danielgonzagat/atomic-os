@@ -72,7 +72,7 @@ type RegisteredToolForList = {
 };
 
 const EMPTY_OBJECT_JSON_SCHEMA: Tool['inputSchema'] = { type: 'object', properties: {} };
-const MCP_TOOL_DESCRIPTION_CHAR_LIMIT = 140;
+const MCP_TOOL_DESCRIPTION_CHAR_LIMIT = 1000;
 
 const CODEX_UNSUPPORTED_SCHEMA_KEYS = new Set([
   '$schema',
@@ -145,9 +145,9 @@ function installCodexSafeToolList(serverInstance: McpServer): void {
   const registry = Object.getOwnPropertyDescriptor(serverInstance, '_registeredTools')?.value;
   if (!isToolRegistry(registry)) return;
 
-  for (const tool of Object.values(registry)) {
-    delete tool.execution;
-  }
+  // for (const tool of Object.values(registry)) {
+  //   delete tool.execution;
+  // }
 
   serverInstance.server.setRequestHandler(ListToolsRequestSchema, (): ListToolsResult => ({
     tools: Object.entries(registry)

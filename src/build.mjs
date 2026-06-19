@@ -71,6 +71,7 @@ const ENTRY = [
   'gates/test-execution-gate.ts',
   'gates/lint-fix-gate.ts',
   'gates/temporal-session-gate.ts',
+  'gates/py-strict-null.ts',
   'gates/lens.ts',
   'gates/repair.ts',
   'gates/algebra.ts',
@@ -86,9 +87,13 @@ const ENTRY = [
   'gates/findings-delta-gate.proof.ts',
   'gates/probe-convergence-gate.proof.ts',
   'gates/codex-config-edit-tool.proof.ts',
+  'gates/resource-lifetime-gate.ts',
+  'gates/artifact-hygiene-gate.ts',
+  'gates/concurrency-lock-gate.ts',
+  'gates/closure-meta-gate.ts',
 ].map((f) => path.join(dir, f));
 const OUT = path.join(dir, 'dist');
-const BUILD_OUT = fs.mkdtempSync(path.join(os.tmpdir(), `atomic-edit-dist-${process.pid}-`));
+const BUILD_OUT = (() => { try { return fs.mkdtempSync(path.join(os.tmpdir(), `atomic-edit-dist-${process.pid}-`)); } catch (e) { return fs.mkdtempSync(path.join(dir, `.build-tmp-${process.pid}-`)); } })();
 const REQUIRED_DIST_ARTIFACTS = [
   'server.js',
   'server-helpers-hot-reload.js',
@@ -103,6 +108,7 @@ const REQUIRED_DIST_ARTIFACTS = [
   'trace.js',
   'gates/contract.js',
   'gates/algebra.js',
+  'gates/py-strict-null.js',
   'gates/converge-operator.js',
   'gates/reachability-gate.proof.js',
   'gates/binding-gate.proof.js',

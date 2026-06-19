@@ -123,6 +123,13 @@ function liveBrokerSocket(value) {
   if (endpoint.startsWith('file://')) {
     try {
       const dir = fileURLToPath(endpoint);
+      const marker = JSON.parse(fs.readFileSync(path.join(dir, 'broker.json'), 'utf8'));
+      if (marker?.protocol !== 'atomic-file-broker-v1' || !Number.isInteger(marker?.pid) || marker.pid <= 1) return '';
+      try {
+        process.kill(marker.pid, 0);
+      } catch (error) {
+        if (error?.code !== 'EPERM') return '';
+      }
       return fs.existsSync(path.join(dir, 'requests')) && fs.existsSync(path.join(dir, 'responses')) ? endpoint : '';
     } catch {
       return '';
@@ -186,13 +193,13 @@ function runProofViaBroker(name, timeout, env) {
   const proofPath = path.join(sourceDir, 'gates', name);
   const request = JSON.stringify({
     command: `${shellPath(process.execPath)} ${shellPath(proofPath)} --json`,
-    cwd: env.ATOMIC_HOST_WRITE_ROOT ?? repoRoot,
-    effectRoot: env.ATOMIC_HOST_WRITE_ROOT ?? repoRoot,
+    cwd: sourceDir,
+    effectRoot: sourceDir,
     timeoutMs: timeout,
     env,
   });
   const result = childProcess.spawnSync(process.execPath, [client, socket], {
-    cwd: env.ATOMIC_HOST_WRITE_ROOT ?? repoRoot,
+    cwd: sourceDir,
     env,
     input: request,
     encoding: 'utf8',
@@ -233,8 +240,7 @@ function inspectHostEnv(env, mode) {
   let socketError = null;
   try {
     if (brokerSocket.startsWith('file://')) {
-      const dir = fileURLToPath(brokerSocket);
-      const ready = fs.existsSync(path.join(dir, 'requests')) && fs.existsSync(path.join(dir, 'responses'));
+      const ready = liveBrokerSocket(brokerSocket) === brokerSocket;
       socketExists = ready;
       brokerEndpointReady = ready;
       brokerEndpointKind = 'file';

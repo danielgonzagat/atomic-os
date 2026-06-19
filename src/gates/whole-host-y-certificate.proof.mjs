@@ -50,6 +50,7 @@ function runProof(name) {
     cwd: sourceDir,
     encoding: 'utf8',
     timeout: 120000,
+    maxBuffer: 16 * 1024 * 1024,
   });
   let parsed = null;
   try {

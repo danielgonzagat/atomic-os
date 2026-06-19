@@ -59,6 +59,7 @@ const requiredCommands = [
   'node gates/chrome-devtools-bridge.proof.mjs --json',
   'node gates/security-monotonicity.proof.mjs --json',
   'node gates/self-expansion-validator-lattice.proof.mjs --json',
+  'node gates/lattice-completeness.proof.ts --json',
   'node gates/self-evolution-harness.proof.mjs --json',
   'node gates/self-evolution-mcp-tool.proof.mjs --json',
   'node gates/self-evolution-disproof-consumer.proof.mjs --json',
@@ -68,6 +69,8 @@ const requiredCommands = [
   'node gates/fixed-model-lift.proof.mjs --json',
   'node gates/atomic-agent-bench.proof.mjs',
   'node gates/test-execution-gate.proof.mjs --json',
+  'node gates/vitest-package-suite.proof.mjs --json',
+  'node gates/multilang-supply-chain-resolver.proof.mjs --json',
   'node proof-chain.proof.mjs --json',
   'node gates/proof-snapshot-compact.proof.mjs --json',
   'node gates/proof-ledger-external-root.proof.mjs --json',
@@ -79,9 +82,11 @@ const requiredCommands = [
   'node gates/atomic-exec-readonly-usability.proof.mjs --json',
   'node gates/atomic-exec-output-compact.proof.mjs --json',
   'node gates/mcp-tool-list-compact.proof.mjs --json',
+  'node gates/doc-honesty.proof.mjs --json',
   'node gates/readcode-missing-path-recovery.proof.mjs --json',
   'node gates/readcode-selector-error-no-recovery.proof.mjs --json',
   'node gates/effect-metadata-mode.proof.mjs --json',
+  'node gates/effect-snapshot-honest-ceiling.proof.mjs --json',
   'node gates/atomic-exec-prove-effect-required.proof.mjs --json',
   'node gates/atomic-exec-indirection-denial.proof.mjs --json',
   'node gates/self-expansion-unexpected-effects.proof.mjs --json',
@@ -120,11 +125,13 @@ const requiredPhases = [
   'self-evolution-real',
   'benchmark',
   'test',
+  'supply-chain',
   'ledger',
   'certificate',
   'runtime',
   'agent-runtime',
   'usability',
+  'doc-honesty',
   'effect-metadata',
   'effect-admission',
   'effect-scope',
@@ -141,7 +148,7 @@ function main() {
   const missingPhases = requiredPhases.filter((phase) => !source.includes(`phase: '${phase}'`));
   record(
     results,
-    'atomic_expand_self has a mandatory validator lattice beyond typecheck, including runtime-freshness, offline reachability, binding, formal, property, findings-delta, contract-edge, runtime-probe, semantic-impact, monotonicity, and read-only exec usability',
+    'atomic_expand_self has a mandatory validator lattice beyond typecheck, including runtime-freshness, offline reachability, binding, formal, property, findings-delta, contract-edge, runtime-probe, semantic-impact, supply-chain, public Vitest, effect snapshot honesty, monotonicity, and read-only exec usability',
     source.includes('MANDATORY_SELF_EXPANSION_VALIDATORS') && missing.length === 0 && missingPhases.length === 0,
     { missing, missingPhases },
   );
@@ -149,10 +156,14 @@ function main() {
     results,
     'caller proofCommands are additive and cannot replace mandatory validators',
     source.includes('normalizeSelfExpansionProofCommands') &&
-      /const proofCommands = normalizeSelfExpansionProofCommands\(a\.proofCommands\);/.test(source) &&
+      // Accept `const` OR `let` — the invariant is that the caller's proofCommands are run THROUGH
+      // the normalizer (which unions in the mandatory validators), not the declaration keyword. The
+      // handler later re-assigns `proofCommands` for sound incremental filtering, so `let` is correct.
+      /(?:const|let) proofCommands = normalizeSelfExpansionProofCommands\(a\.proofCommands\);/.test(source) &&
       !source.includes("a.proofCommands ?? ['node build.mjs', 'node codex-atomic-only-hook.proof.mjs --json']"),
     {
       hasNormalizer: source.includes('normalizeSelfExpansionProofCommands'),
+      normalizerApplied: /(?:const|let) proofCommands = normalizeSelfExpansionProofCommands\(a\.proofCommands\);/.test(source),
       oldDefaultRemoved: !source.includes("a.proofCommands ?? ['node build.mjs', 'node codex-atomic-only-hook.proof.mjs --json']"),
     },
   );
@@ -241,6 +252,16 @@ function main() {
       brokerTimeoutResolves,
     },
   );
+  // Property (not a magic literal): the liveness-critical validators get an ELEVATED per-proof budget
+  // strictly above the generic default, so a legitimately-slow gate on a large repo is not killed
+  // mid-success. We parse proofTimeoutMs and assert elevated >= default AND elevated >= 90_000s floor —
+  // robust to future tuning (the budget was raised 90_000 -> 600_000 for the 844k-LOC host), and still
+  // DISCRIMINATING: an elevated branch below the default would flip this RED.
+  const ptmBody = (source.match(/function proofTimeoutMs\([\s\S]*?\n\}/) || [''])[0];
+  const ptmReturns = [...ptmBody.matchAll(/return\s+(\d+)/g)].map((m) => Number(m[1]));
+  const ptmDefault = ptmReturns.length ? ptmReturns[ptmReturns.length - 1] : 0;
+  const ptmElevatedMax = ptmReturns.length ? Math.max(...ptmReturns) : 0;
+  const livenessElevatedBudget = ptmElevatedMax >= 90000 && ptmElevatedMax >= ptmDefault && ptmDefault > 0;
   record(
     results,
     'self-expansion gives liveness-critical validators explicit sub-client timeout budgets',
@@ -248,15 +269,21 @@ function main() {
       source.includes("command.includes('algebra.proof.mjs')") &&
       source.includes("command.includes('contract-edge-gate')") &&
       source.includes("command.includes('self-evolution-mcp-tool')") &&
+      source.includes("command.includes('vitest-package-suite')") &&
+      source.includes("command.includes('multilang-supply-chain-resolver')") &&
       source.includes("command.includes('compiled-mcp-y-certificate')") &&
-      source.includes('return 90000'),
+      livenessElevatedBudget,
     {
       hasTypeBudget: source.includes("command.includes('type-soundness-gate')"),
       hasAlgebraBudget: source.includes("command.includes('algebra.proof.mjs')"),
       hasContractEdgeBudget: source.includes("command.includes('contract-edge-gate')"),
       hasSelfEvolutionToolBudget: source.includes("command.includes('self-evolution-mcp-tool')"),
+      hasVitestPackageBudget: source.includes("command.includes('vitest-package-suite')"),
+      hasMultilangSupplyChainBudget: source.includes("command.includes('multilang-supply-chain-resolver')"),
       hasCompiledCertificateBudget: source.includes("command.includes('compiled-mcp-y-certificate')"),
-      hasNinetySecondBudget: source.includes('return 90000'),
+      livenessElevatedBudget,
+      ptmDefault,
+      ptmElevatedMax,
     },
   );
   record(
@@ -267,6 +294,8 @@ function main() {
       source.includes('type-soundness-gate') &&
       source.includes('contract-edge-gate') &&
       source.includes('self-evolution-mcp-tool') &&
+      source.includes('vitest-package-suite') &&
+      source.includes('multilang-supply-chain-resolver') &&
       source.includes('queue.sort') &&
       source.includes('results[item.index]'),
     {
@@ -275,8 +304,24 @@ function main() {
       prioritizesType: source.includes('type-soundness-gate'),
       prioritizesContractEdge: source.includes('contract-edge-gate'),
       prioritizesSelfEvolutionTool: source.includes('self-evolution-mcp-tool'),
+      prioritizesVitestPackage: source.includes('vitest-package-suite'),
+      prioritizesMultilangSupplyChain: source.includes('multilang-supply-chain-resolver'),
       sortsQueue: source.includes('queue.sort'),
       preservesReceiptOrder: source.includes('results[item.index]'),
+    },
+  );
+  record(
+    results,
+    'self-expansion runs LSP and package-suite validators host-direct instead of through the proof broker',
+    source.includes('function selfExpansionProofMustRunHostDirect') &&
+      source.includes("'lsp-semantic-delta.proof.mjs'") &&
+      source.includes("'vitest-package-suite.proof.mjs'") &&
+      source.includes("'multilang-supply-chain-resolver.proof.mjs'"),
+    {
+      hasHostDirectRouter: source.includes('function selfExpansionProofMustRunHostDirect'),
+      hasLspSemanticDeltaHostDirect: source.includes("'lsp-semantic-delta.proof.mjs'"),
+      hasVitestPackageHostDirect: source.includes("'vitest-package-suite.proof.mjs'"),
+      hasMultilangSupplyChainHostDirect: source.includes("'multilang-supply-chain-resolver.proof.mjs'"),
     },
   );
   record(

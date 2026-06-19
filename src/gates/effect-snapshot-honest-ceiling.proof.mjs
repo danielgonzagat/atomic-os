@@ -80,6 +80,21 @@ try {
     snap.limitReached === true,
     'an oversized file makes the snapshot INCOMPLETE (was a silent skip)',
   );
+
+  // 4) self-evolution harness temp payloads are scratch, not coverage poison
+  reset();
+  fs.writeFileSync(path.join(fixtureRoot, 'tracked.txt'), 'real\n');
+  fs.writeFileSync(path.join(fixtureRoot, '.self-evolution-harness-input.123.json'), 'x'.repeat(50));
+  fs.writeFileSync(path.join(fixtureRoot, '.self-evolution-harness-output.123.json'), 'y'.repeat(50));
+  snap = captureEffectSnapshot(fixtureRoot, { maxFiles: 2, maxFileBytes: 10 });
+  expect(
+    snap.limitReached === false,
+    'self-evolution harness temp files are scratch and do not make the snapshot UNJUDGED',
+  );
+  expect(
+    snap.files.size === 1 && snap.files.has('tracked.txt'),
+    'scratch-heavy self-evolution payloads do not crowd out real tracked bytes',
+  );
 } catch (error) {
   expect(false, `threw: ${error instanceof Error ? error.message : String(error)}`);
 } finally {

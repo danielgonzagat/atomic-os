@@ -8,7 +8,7 @@
  * Example: node atomic-call.mjs code_readcode '{"path":"src/foo.ts"}'
  */
 
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
@@ -42,54 +42,65 @@ const request = JSON.stringify({
   id: Math.floor(Math.random() * 1000000),
   method: 'tools/call',
   params: { name: tool, arguments: args },
-});
+}) + '\n';
 
-const result = spawnSync(nodeBin, [serverPath], {
-  input: request,
-  encoding: 'utf8',
-  timeout: 30000,
-  maxBuffer: 64 * 1024 * 1024,
+const server = spawn(nodeBin, [serverPath], {
   stdio: ['pipe', 'pipe', 'pipe'],
   env: { ...process.env, ATOMIC_EDIT_MCP_SELF_HOSTED: '1', ATOMIC_EDIT_ALLOW_SELF_HOSTED: '1', ATOMIC_WORKSPACE_ROOT: '', ATOMIC_DECLARED_WORKSPACE_ROOT: '' },
 });
 
-if (result.error) {
-  process.stderr.write(`atomic-call: spawn error: ${result.error.message}\n`);
-  process.exit(1);
-}
+let stdoutData = '';
+let stderrData = '';
 
-// Parse all JSON-RPC lines from output
-const lines = result.stdout.split('\n').filter(Boolean);
-let response = null;
-for (const line of lines) {
-  try {
-    const r = JSON.parse(line);
-    if (r.id === 1 || r.result) response = r;
-  } catch {
-    // skip non-JSON lines
+server.stdout.on('data', (d) => {
+  stdoutData += d.toString();
+  const allLines = stdoutData.split('\n');
+  let jsonStr = '';
+  for (const line of allLines) {
+    if (line.startsWith('{')) {
+      jsonStr = line;
+    } else if (jsonStr && !line.startsWith('[')) {
+      jsonStr += '\n' + line;
+    }
   }
-}
-
-if (!response) {
-  process.stderr.write(`atomic-call: no valid response from server\n`);
-  process.stderr.write(result.stderr || '');
-  process.exit(1);
-}
-
-if (response.error) {
-  process.stderr.write(`atomic-call error: ${JSON.stringify(response.error)}\n`);
-  process.exit(1);
-}
-
-const content = response.result?.content;
-if (content?.[0]?.text) {
-  // Try parsing as JSON for structured output
-  try {
-    const parsed = JSON.parse(content[0].text);
-    console.log(JSON.stringify(parsed, null, 2));
-  } catch {
-    console.log(content[0].text);
+  if (jsonStr) {
+    try {
+      const response = JSON.parse(jsonStr);
+      if (response.id === 1 || response.result || response.error) {
+        if (response.error) {
+          process.stderr.write(`atomic-call error: ${JSON.stringify(response.error)}\n`);
+          process.exit(1);
+        }
+        const content = response.result?.content;
+        if (content?.[0]?.text) {
+          try {
+            console.log(JSON.stringify(JSON.parse(content[0].text), null, 2));
+          } catch {
+            console.log(content[0].text);
+          }
+        } else {
+          console.log(JSON.stringify(response.result, null, 2));
+        }
+        server.kill();
+        process.exit(0);
+      }
+    } catch (e) {
+      // Not fully buffered yet
+    }
   }
-} else {
-  console.log(JSON.stringify(response.result, null, 2));
-}
+});
+
+server.stderr.on('data', (d) => {
+  stderrData += d.toString();
+  process.stderr.write(d); // Stream stderr to user
+});
+
+server.on('close', (code) => {
+  if (code !== 0 && !stdoutData.includes('"result"')) {
+    process.stderr.write(`atomic-call: server exited with code ${code}\n`);
+    process.exit(1);
+  }
+});
+
+server.stdin.write(request);
+// Do NOT call server.stdin.end() so the server stays alive!

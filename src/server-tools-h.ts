@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { atomicWrite } from './server-helpers-io.js';
@@ -86,11 +87,13 @@ server.registerTool(
   },
   async (a) => {
     try {
-      const rawScore = Math.max(
-        ...a.evidence.map((entry) =>
-          verifiedEvidenceWeight(entry.kind, entry.status, entry.artifactPaths),
-        ),
-      );
+      const rawScore = a.evidence.length
+        ? Math.max(
+            ...a.evidence.map((entry) =>
+              verifiedEvidenceWeight(entry.kind, entry.status, entry.artifactPaths),
+            ),
+          )
+        : 0; // empty evidence ⇒ 0, not Math.max() === -Infinity (the single-call path bypasses Zod .min(1))
       const failed = a.evidence.filter((entry) => entry.status === 'failed');
       const productProven = hasVerifiedProductProof(a.evidence);
       let score = rawScore;
@@ -151,11 +154,13 @@ server.registerTool(
   },
   async (a) => {
     try {
-      const trust = Math.max(
-        ...a.validation.map((entry) =>
-          verifiedEvidenceWeight(entry.kind, entry.status, entry.artifactPaths),
-        ),
-      );
+      const trust = a.validation.length
+        ? Math.max(
+            ...a.validation.map((entry) =>
+              verifiedEvidenceWeight(entry.kind, entry.status, entry.artifactPaths),
+            ),
+          )
+        : 0; // empty validation ⇒ 0, not -Infinity (single-call path bypasses Zod .min(1))
       const failing = a.validation.filter((entry) => entry.status === 'failed');
       // productProof requires VERIFIED product evidence (an artifact on disk), not a
       // self-reported passed status — so a receipt cannot claim 100 from a bare
@@ -262,10 +267,18 @@ server.registerTool(
       });
       const blocking = classified.filter((claim) => claim.truth !== 'REAL');
       const refused = classified.filter((claim) => claim.refused === true);
+      // Count refusals BY KIND — a runtime_probe is refused for a missing gateRunId, while
+      // api/db/browser/external_provider are refused for a missing artifactPath. The note must
+      // attribute each honestly (an honesty tool that mislabels its own reason is itself a facade).
+      const refusedProbes = refused.filter((claim) => claim.evidenceKind === 'runtime_probe').length;
+      const refusedArtifacts = refused.length - refusedProbes;
+      const refusalParts: string[] = [];
+      if (refusedProbes > 0)
+        refusalParts.push(`${refusedProbes} runtime_probe(s) sem gateRunId de gate real (use atomic_prove)`);
+      if (refusedArtifacts > 0)
+        refusalParts.push(`${refusedArtifacts} alegacao(oes) sem artifactPath real para verificar`);
       const refusalNote =
-        refused.length > 0
-          ? ` ${refused.length} runtime_probe(s) RECUSADA(s) por falta de gateRunId de gate real (use atomic_prove).`
-          : '';
+        refusalParts.length > 0 ? ` ${refused.length} RECUSADA(s): ${refusalParts.join('; ')}.` : '';
       const summaryForHuman =
         (blocking.length === 0
           ? `Todas as ${classified.length} alegacoes tem prova de comportamento real.`
@@ -493,6 +506,140 @@ server.registerTool(
       }
       fs.rmSync(dir, { recursive: true, force: false });
       const summaryForHuman = `Lock liberado: ${a.frontId}${a.reason ? ` (${a.reason})` : ''}.`;
+      return ok({ ok: true, changed: true, summaryForHuman, summary: summaryForHuman });
+    } catch (e) {
+      return fail(e instanceof Error ? e.message : String(e));
+    }
+  },
+);
+
+// ── Distributed lock (file + optional Redis) ───────────────────────────
+
+const machineId = `${os.hostname()}-${process.pid}`;
+
+server.registerTool(
+  'atomic_distributed_lock_acquire',
+  {
+    title: 'Acquire a distributed lock (file + optional Redis)',
+    description:
+      'Acquires a front lock with file-based (POSIX mkdir, local) primary guard and optional Redis backend for cross-machine coordination. Set ATOMIC_REDIS_URL to enable Redis. Returns lock info with machineId, expiry, and heartbeat guidance.',
+    inputSchema: {
+      frontId: z.string().min(1),
+      owner: z.string().min(1),
+      objective: z.string().min(1),
+      ttlMs: z.number().int().min(1000).max(600000).optional(),
+      redisUrl: z.string().optional(),
+      allowedFiles: z.array(z.string()).optional(),
+      blockedFiles: z.array(z.string()).optional(),
+      acceptanceCriteria: z.array(z.string()).optional(),
+    },
+  },
+  async (a) => {
+    try {
+      const now = Date.now();
+      const ttl = a.ttlMs ?? 300_000;
+      const dir = lockDir(a.frontId);
+
+      // Phase 1: local file lock (POSIX mkdir = atomic)
+      try {
+        fs.mkdirSync(dir);
+      } catch {
+        // Check if existing lock is stale
+        const existing = readLockRecord(safeLockId(a.frontId)) as Record<string, unknown> | null;
+        if (existing) {
+          const exp = (existing.expiresAt as number) ?? 0;
+          if (exp > now) {
+            return fail(`Lock ${a.frontId} is held by ${String(existing.owner ?? '?')} until ${new Date(exp).toISOString()}`);
+          }
+        }
+        // Stale — take it
+        fs.rmSync(dir, { recursive: true, force: true });
+        fs.mkdirSync(dir);
+      }
+
+      const record: Record<string, unknown> = {
+        frontId: safeLockId(a.frontId),
+        owner: a.owner,
+        objective: a.objective,
+        machineId,
+        acquiredAt: now,
+        expiresAt: now + ttl,
+        allowedFiles: a.allowedFiles ?? [],
+        blockedFiles: a.blockedFiles ?? [],
+        acceptanceCriteria: a.acceptanceCriteria ?? [],
+        status: 'claimed',
+        backend: 'file',
+      };
+
+      // Phase 2: Redis (if configured)
+      const redisUrl = a.redisUrl ?? process.env.ATOMIC_REDIS_URL;
+      if (redisUrl) {
+        try {
+          // Dynamic import with no type dependency on 'redis' package
+          const redisMod = await (Function('return import("redis")')()) as { createClient: (opts: { url: string }) => { connect: () => Promise<void>; set: (k: string, v: string, opts: { NX: boolean; PX: number }) => Promise<string | null>; quit: () => Promise<void> } };
+          const redis = redisMod.createClient({ url: redisUrl });
+          await redis.connect();
+          const redisKey = `atomic-lock:${safeLockId(a.frontId)}`;
+          const acquired = await redis.set(redisKey, JSON.stringify({ owner: a.owner, machineId, acquiredAt: now }), { NX: true, PX: ttl });
+          if (!acquired) {
+            fs.rmSync(dir, { recursive: true, force: true });
+            return fail(`Lock ${a.frontId} is held in Redis by another machine`);
+          }
+          record.backend = 'file+redis';
+          record.redisKey = redisKey;
+          await redis.quit();
+        } catch (redisErr) {
+          // Redis failed — keep file lock only (degraded mode)
+          record.backend = 'file-only';
+          record.redisError = String(redisErr instanceof Error ? redisErr.message : redisErr);
+        }
+      }
+
+      atomicWrite(lockFile(a.frontId), JSON.stringify(record, null, 2));
+      const summaryForHuman = `Distributed lock acquired: ${a.frontId} by ${a.owner} on ${machineId} (${record.backend}). TTL: ${ttl}ms.`;
+      return ok({ ok: true, summaryForHuman, summary: summaryForHuman, lock: record });
+    } catch (e) {
+      return fail(e instanceof Error ? e.message : String(e));
+    }
+  },
+);
+
+server.registerTool(
+  'atomic_distributed_lock_release',
+  {
+    title: 'Release a distributed lock',
+    description:
+      'Releases a distributed lock (file + optional Redis). Owner must match or force=true. Cleans both file lock and Redis key.',
+    inputSchema: {
+      frontId: z.string().min(1),
+      owner: z.string().min(1),
+      force: z.boolean().optional(),
+      reason: z.string().optional(),
+    },
+  },
+  async (a) => {
+    try {
+      const dir = lockDir(a.frontId);
+      const current = readLockRecord(safeLockId(a.frontId)) as Record<string, unknown> | null;
+      if (!fs.existsSync(dir)) return ok({ ok: true, changed: false, note: 'lock already absent' });
+      if (!a.force && current?.owner !== a.owner) {
+        return fail(`lock owned by ${String(current?.owner ?? 'unknown')}; release refused for ${a.owner}`);
+      }
+
+      // Release Redis if configured
+      const redisUrl = process.env.ATOMIC_REDIS_URL;
+      if (redisUrl && current?.redisKey) {
+        try {
+          const redisMod = await (Function('return import("redis")')()) as { createClient: (opts: { url: string }) => { connect: () => Promise<void>; del: (k: string) => Promise<number>; quit: () => Promise<void> } };
+          const redis = redisMod.createClient({ url: redisUrl });
+          await redis.connect();
+          await redis.del(current.redisKey as string);
+          await redis.quit();
+        } catch { /* best-effort Redis cleanup */ }
+      }
+
+      fs.rmSync(dir, { recursive: true, force: false });
+      const summaryForHuman = `Distributed lock released: ${a.frontId}${a.reason ? ` (${a.reason})` : ''}.`;
       return ok({ ok: true, changed: true, summaryForHuman, summary: summaryForHuman });
     } catch (e) {
       return fail(e instanceof Error ? e.message : String(e));

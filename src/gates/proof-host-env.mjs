@@ -16,6 +16,13 @@ function brokerEndpointReady(endpoint) {
   if (value.startsWith('file://')) {
     try {
       const dir = fileURLToPath(value);
+      const marker = JSON.parse(fs.readFileSync(path.join(dir, 'broker.json'), 'utf8'));
+      if (marker?.protocol !== 'atomic-file-broker-v1' || !Number.isInteger(marker?.pid) || marker.pid <= 1) return false;
+      try {
+        process.kill(marker.pid, 0);
+      } catch (error) {
+        if (error?.code !== 'EPERM') return false;
+      }
       return fs.existsSync(path.join(dir, 'requests')) && fs.existsSync(path.join(dir, 'responses'));
     } catch {
       return false;
@@ -26,6 +33,15 @@ function brokerEndpointReady(endpoint) {
   } catch {
     return false;
   }
+}
+
+function mayUseSharedBrokerState() {
+  return (
+    Boolean(process.env.ATOMIC_EXEC_BROKER_SOCKET) ||
+    process.env.ATOMIC_HOST_SANDBOX === 'macos-sandbox-exec' ||
+    process.env.ATOMIC_HOST_ATOMIC_ONLY === '1' ||
+    process.env.ATOMIC_USE_BROKER_STATE === '1'
+  );
 }
 
 function readBrokerState(repoRoot) {
@@ -54,13 +70,16 @@ function currentProofRequiresInheritedBroker() {
 }
 
 export function inheritedAtomicHostEnv(repoRoot) {
-  const state = readBrokerState(repoRoot);
+  const useSharedBrokerState = mayUseSharedBrokerState();
+  const state = useSharedBrokerState ? readBrokerState(repoRoot) : null;
   const nestedBrokerCommand = Boolean(process.env.ATOMIC_EXEC_BROKER_ROOT);
   const allowNestedBroker =
     process.env.ATOMIC_ALLOW_NESTED_PROOF_BROKER === '1' || currentProofRequiresInheritedBroker();
   const suppressInheritedBroker = nestedBrokerCommand && !allowNestedBroker;
-  const explicitSocket = suppressInheritedBroker ? '' : process.env.ATOMIC_EXEC_BROKER_SOCKET || '';
-  const stateSocket = !suppressInheritedBroker && brokerEndpointReady(state?.socket) ? state.socket : '';
+  const explicitCandidate = suppressInheritedBroker ? '' : process.env.ATOMIC_EXEC_BROKER_SOCKET || '';
+  const explicitSocket = brokerEndpointReady(explicitCandidate) ? explicitCandidate : '';
+  const stateSocket =
+    useSharedBrokerState && !suppressInheritedBroker && brokerEndpointReady(state?.socket) ? state.socket : '';
   const socket = explicitSocket || stateSocket;
   const stateRoot = typeof state?.repoRoot === 'string' ? state.repoRoot : '';
   const hostRoot = path.resolve(stateRoot || process.env.ATOMIC_HOST_WRITE_ROOT || repoRoot);

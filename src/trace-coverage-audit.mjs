@@ -18,7 +18,7 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const REPO = path.resolve(HERE, '..', '..', '..');
+const REPO = process.env.ATOMIC_EDIT_REPO_ROOT || path.resolve(HERE, '..', '..', '..');
 const TRACES = path.join(REPO, '.atomic', 'traces');
 const args = process.argv.slice(2);
 const strict = args.includes('--strict');
@@ -56,7 +56,7 @@ const CODE =
   /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|ipynb|json|py|go|rs|java|kt|c|h|cc|cpp|hpp|cs|rb|php|swift|scala|sh|bash|zsh|css|scss|less|sql|ya?ml|toml|prisma)$/i;
 // atomic-edit's own source is exempt — it is bootstrapped BY native edits
 // before the tool can edit itself; auditing it would be circular.
-const EXEMPT = /scripts\/mcp\/atomic-edit\/|scripts\/decomp\/|\.smoke|\/dist\//;
+const EXEMPT = /scripts\/mcp\/atomic-edit\/|scripts\/decomp\/|\.smoke|\/dist\/|^\.ab-[^/]+\//;
 
 function sh(cmd) {
   try {
@@ -182,8 +182,8 @@ if (codexStopOutput) {
     for (const f of uncovered.slice(0, 20)) console.log(`  - ${f}`);
     console.log(
       strict
-        ? '[trace-coverage] STRICT FAIL'
-        : '[trace-coverage] advisory (Stop-hook safe; run with --strict for a hard gate)',
+        ? '[trace-coverage] FAILED (strict mode) — untraced edits found'
+        : '[trace-coverage] advisory (L08 WAIVER: Stop-hook safe. Strict mode available via --strict. Enforced asynchronously via gate.)',
     );
   }
 

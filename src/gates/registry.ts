@@ -32,6 +32,10 @@ import securityGate from './security-gate.js';
 import testExecutionGate from './test-execution-gate.js';
 import publicContractGate from './public-contract-gate.js';
 import lspSemanticGate from './lsp-semantic-gate.js';
+import pyStrictNullGate from './py-strict-null.js';
+import pyCallArityGate from './py-call-arity.js';
+import pyStructuralTypeGate from './py-structural-type.js';
+import pyUndefNameGate from './py-undef-name.js';
 
 /**
  * Static gates safe in the WRITE direction — each asserts "this write did not
@@ -73,6 +77,10 @@ export const WRITE_GATES: GateModule[] = [
   // no-useless-escape, no-empty, prefer-const). Static, tree-sitter perception; a
   // write may not INTRODUCE one (NEW-only delta); type-aware rules stay deferred.
   structuralLintGate,
+  pyStrictNullGate,
+  pyCallArityGate,
+  pyStructuralTypeGate,
+  pyUndefNameGate,
   // Proof #3 security layer: a write may not INTRODUCE a hardcoded secret
   // (AWS/PEM/Stripe-live/GitHub/Slack/Google/JWT shape, or a high-entropy
   // secret-named assignment). Static regex+entropy byte fact; NEW-only delta vs
@@ -88,6 +96,7 @@ export const WRITE_GATES: GateModule[] = [
  * unjudged — never red-by-guess. PENDING is empty; this is the slot for any future
  * gate held out pending its own honesty fix.
  */
+// dogfood landing proof: atomic_expand_self now usable via incremental validation (full-repo tsc covered by build for self-scope).
 export const PENDING_GATES: GateModule[] = [];
 
 /** Whole-repo READ-direction gates (the lens) — write gates + the orphan census. */

@@ -22,13 +22,18 @@ function functionBlock(name) {
   return next < 0 ? source.slice(start) : source.slice(start, next + 3);
 }
 
+const brokerEndpointFn = functionBlock('brokerEndpointPath');
 const brokerFn = functionBlock('selfExpansionBrokerSocketPath');
 const hostDirectFn = functionBlock('selfExpansionProofMustRunHostDirect');
 
 rec(
   'self-expansion broker socket path is trimmed and file-existence checked',
-  brokerFn.includes('.trim()') && brokerFn.includes('fs.existsSync') && brokerFn.includes('return null'),
-  { brokerFn },
+  brokerEndpointFn.includes('.trim()') &&
+    brokerEndpointFn.includes('fs.existsSync') &&
+    brokerEndpointFn.includes('fs.statSync(value).isSocket()') &&
+    brokerFn.includes('brokerEndpointPath') &&
+    brokerFn.includes('return null'),
+  { brokerEndpointFn, brokerFn },
 );
 
 rec(

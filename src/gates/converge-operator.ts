@@ -12,7 +12,7 @@
  * engine file owned by another session, so this operator carries its OWN EXTERNAL
  * PROPOSER REGISTRY and never edits a gate. The proposers are pure functions of the
  * overlay + the reds the registry already reported; the operator imports only
- * `runGates`/`LENS_GATES` from gates/registry.js READ-ONLY to re-gate a candidate.
+ * `runGates`/`WRITE_GATES` from gates/registry.js READ-ONLY to re-gate a candidate.
  *
  * TWO PROPOSERS — exactly the two dominant mechanical red classes:
  *
@@ -25,7 +25,7 @@
  *
  *   (2) CONNECTION red — a NEW relative import in the overlay file that resolves to
  *       NOTHING (`import './x' resolves to nothing` — the canonical connection fact
- *       from gates/contract.ts). The registry's LENS_GATES do not carry the byte-floor
+ *       from gates/contract.ts). The registry's WRITE_GATES do not carry the byte-floor
  *       connection gate (it lives in connection-gate.ts, off the registry), so this
  *       operator DETECTS the dangling relative wire itself — overlay-aware, with the
  *       SAME candidate resolution as the shared resolveRelImport — and the proposer's
@@ -33,7 +33,7 @@
  *       one such target exists on disk/overlay. Ambiguous or absent → no proposal.
  *
  * THE HAND (monotone acceptance — this is what makes it sound). Each pass:
- *   collect total reds R = registry reds (over LENS_GATES) + the operator's own
+ *   collect total reds R = registry reds (over WRITE_GATES) + the operator's own
  *   dangling-relative-import reds; gather every proposer's byte-splices; apply ONLY
  *   the maximal subset whose application STRICTLY DECREASES |R| and ADDS NO NEW red.
  *   Re-gate the candidate the same way. Repeat until R = ∅ (converged) or no
@@ -59,7 +59,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { LENS_GATES, runGates, type UnifiedRed } from './registry.js';
+import { WRITE_GATES, runGates, type UnifiedRed } from './registry.js';
 import { makeContext } from './contract.js';
 import lintFixGate from './lint-fix-gate.js';
 import type { ConvergeResult } from './algebra.js';
@@ -214,7 +214,7 @@ function relImportSites(content: string): RelImportSite[] {
 }
 
 /**
- * CONNECTION reds the operator detects itself (the registry LENS_GATES do not carry
+ * CONNECTION reds the operator detects itself (the registry WRITE_GATES do not carry
  * the byte-floor connection gate). A red = a relative import in the overlay file that
  * resolves to nothing. Only files in `overlay` are judged (this is the candidate set
  * the operator is converging). The fact phrasing matches gates/contract.ts.
@@ -237,10 +237,10 @@ function connectionReds(repoRoot: string, overlay: Map<string, string>): Unified
   return reds;
 }
 
-/** Total red set = registry reds (binding + the rest of LENS_GATES) ∪ the operator's connection reds. */
+/** Total red set = registry reds (binding + the rest of WRITE_GATES) ∪ the operator's connection reds. */
 async function totalReds(repoRoot: string, overlay: Map<string, string>): Promise<UnifiedRed[]> {
   const changed = [...overlay.keys()];
-  const reg = await runGates(LENS_GATES, repoRoot, overlay, changed, true);
+  const reg = await runGates(WRITE_GATES, repoRoot, overlay, changed, true);
   return [...reg.reds, ...connectionReds(repoRoot, overlay)];
 }
 

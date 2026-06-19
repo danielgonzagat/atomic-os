@@ -16,7 +16,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-// web-tree-sitter is ESM; imported lazily in ensureReady to keep startup cheap.
+// web-tree-sitter is ESM; imported lazily in ensureNativeReady to keep startup cheap.
 
 export type AstMatchStrictness = 'cst' | 'smart' | 'ast' | 'relaxed' | 'signature' | 'template';
 
@@ -49,11 +49,34 @@ const GRAMMARS: Record<string, [string, string]> = {
   cpp: ['tree-sitter-cpp', 'tree-sitter-cpp.wasm'],
   bash: ['tree-sitter-bash', 'tree-sitter-bash.wasm'],
   json: ['tree-sitter-json', 'tree-sitter-json.wasm'],
+  html: ['tree-sitter-html', 'tree-sitter-html.wasm'],
+  css: ['tree-sitter-css', 'tree-sitter-css.wasm'],
+  php: ['tree-sitter-php', 'tree-sitter-php.wasm'],
+  kotlin: ['tree-sitter-kotlin', 'tree-sitter-kotlin.wasm'],
+  swift: ['tree-sitter-swift', 'tree-sitter-swift.wasm'],
+  'c-sharp': ['tree-sitter-c-sharp', 'tree-sitter-c-sharp.wasm'],
+  scala: ['tree-sitter-scala', 'tree-sitter-scala.wasm'],
+  lua: ['tree-sitter-lua', 'tree-sitter-lua.wasm'],
+  dart: ['tree-sitter-dart', 'tree-sitter-dart.wasm'],
+  elixir: ['tree-sitter-elixir', 'tree-sitter-elixir.wasm'],
+  haskell: ['tree-sitter-haskell', 'tree-sitter-haskell.wasm'],
+  graphql: ['tree-sitter-graphql', 'tree-sitter-graphql.wasm'],
+  proto: ['tree-sitter-proto', 'tree-sitter-proto.wasm'],
+  zig: ['tree-sitter-zig', 'tree-sitter-zig.wasm'],
+  toml: ['tree-sitter-toml', 'tree-sitter-toml.wasm'],
+  sql: ['tree-sitter-sql', 'tree-sitter-sql.wasm'],
+  yaml: ['tree-sitter-yaml', 'tree-sitter-yaml.wasm'],
 };
 const EXT: Record<string, string> = {
   '.py': 'python', '.js': 'javascript', '.jsx': 'javascript', '.mjs': 'javascript', '.cjs': 'javascript',
   '.ts': 'typescript', '.tsx': 'tsx', '.go': 'go', '.rb': 'ruby', '.rs': 'rust', '.java': 'java',
   '.c': 'c', '.h': 'c', '.cc': 'cpp', '.cpp': 'cpp', '.hpp': 'cpp', '.sh': 'bash', '.bash': 'bash', '.json': 'json',
+  '.html': 'html', '.htm': 'html', '.css': 'css', '.scss': 'css', '.less': 'css',
+  '.php': 'php', '.phtml': 'php', '.kt': 'kotlin', '.kts': 'kotlin', '.swift': 'swift',
+  '.cs': 'c-sharp', '.scala': 'scala', '.lua': 'lua', '.dart': 'dart',
+  '.ex': 'elixir', '.exs': 'elixir', '.hs': 'haskell', '.lhs': 'haskell',
+  '.graphql': 'graphql', '.gql': 'graphql', '.proto': 'proto',
+  '.zig': 'zig', '.toml': 'toml', '.sql': 'sql', '.yaml': 'yaml', '.yml': 'yaml',
 };
 
 function findWasm(pkg: string, file: string): string | null {
@@ -85,15 +108,18 @@ interface TsNode {
   endIndex: number;
   startPosition: TsPoint;
   endPosition: TsPoint;
+  tree: TsTree;
   child(i: number): TsNode;
   childForFieldName?(name: string): TsNode | null;
 }
 interface TsTree {
   rootNode: TsNode;
+  delete(): void;
 }
 interface TsParser {
   setLanguage(lang: unknown): void;
   parse(code: string): TsTree;
+  delete(): void;
 }
 interface TsParserCtor {
   new (): TsParser;
@@ -109,40 +135,83 @@ interface TsModule {
 let TS: TsModule | null = null;
 let inited = false;
 const loadedLangs = new Map<string, unknown>();
+// Set when a parse throws an Emscripten Aborted() — the shared web-tree-sitter WASM heap is then
+// poisoned and every later parse would also fail. parserFor() re-inits the runtime when this is set.
+let wasmPoisoned = false;
 
-export async function ensureReady(_timeoutMs = 8000): Promise<boolean> {
-  if (inited) return TS !== null;
-  inited = true;
-  try {
-    const mod = (await import('web-tree-sitter')) as {
-      Parser?: TsParserCtor;
-      Language?: TsLanguageStatic;
-      default?: { Parser?: TsParserCtor; Language?: TsLanguageStatic } & Partial<TsParserCtor>;
-    };
-    const Parser = (mod.Parser ?? mod.default?.Parser ?? mod.default) as TsParserCtor;
-    const Language = (mod.Language ?? mod.default?.Language) as TsLanguageStatic;
-    await Parser.init();
-    TS = { Parser, Language };
-    return true;
-  } catch {
-    TS = null;
-    return false;
-  }
+let initPromise: Promise<boolean> | null = null;
+
+export async function ensureNativeReady(_timeoutMs = 8000): Promise<boolean> {
+  if (initPromise) return initPromise;
+  initPromise = (async () => {
+    try {
+      const mod = (await import('web-tree-sitter')) as {
+        Parser?: TsParserCtor;
+        Language?: TsLanguageStatic;
+        default?: { Parser?: TsParserCtor; Language?: TsLanguageStatic } & Partial<TsParserCtor>;
+      };
+      const Parser = (mod.Parser ?? mod.default?.Parser ?? mod.default) as TsParserCtor;
+      const Language = (mod.Language ?? mod.default?.Language) as TsLanguageStatic;
+      await Parser.init();
+      TS = { Parser, Language };
+      inited = true;
+      return true;
+    } catch {
+      TS = null;
+      inited = true;
+      return false;
+    }
+  })();
+  return initPromise;
 }
 export function nativeAvailable(): boolean { return TS !== null; }
 export function nativeLanguages(): string[] { return Object.keys(GRAMMARS); }
 
+const parsers = new Map<string, TsParser>();
+const languageLoadPromises = new Map<string, Promise<unknown>>();
+
 async function parserFor(alias?: string): Promise<TsParser | null> {
+  // Recover from a poisoned WASM heap: a prior Emscripten Aborted() leaves the shared runtime dead,
+  // so re-init it and drop the Language objects (and cached parsers/load-promises) bound to the old
+  // instance before handing out a parser.
+  if (wasmPoisoned) {
+    wasmPoisoned = false;
+    TS = null;
+    inited = false;
+    initPromise = null;
+    loadedLangs.clear();
+    languageLoadPromises.clear();
+    parsers.clear();
+    await ensureNativeReady();
+  }
   if (!TS || !alias || !(alias in GRAMMARS)) return null;
   if (!loadedLangs.has(alias)) {
-    const [pkg, file] = GRAMMARS[alias];
-    const wasm = findWasm(pkg, file);
-    if (!wasm) return null;
-    loadedLangs.set(alias, await TS.Language.load(wasm));
+    if (!languageLoadPromises.has(alias)) {
+      const [pkg, file] = GRAMMARS[alias];
+      const wasm = findWasm(pkg, file);
+      if (!wasm) return null;
+      languageLoadPromises.set(alias, TS.Language.load(wasm));
+    }
+    loadedLangs.set(alias, await languageLoadPromises.get(alias)!);
   }
-  const p = new TS.Parser();
-  p.setLanguage(loadedLangs.get(alias));
-  return p;
+  if (!parsers.has(alias)) {
+    const p = new TS.Parser();
+    p.setLanguage(loadedLangs.get(alias));
+    parsers.set(alias, p);
+  }
+  return parsers.get(alias)!;
+}
+
+/** Parse guarded against an Emscripten Aborted()/throw on one file: flags the shared WASM heap
+ *  poisoned (parserFor re-inits next call) and returns null, so the caller marks THAT file unjudged
+ *  instead of crashing the whole multi-file call. The historical "intermittent" abort signature. */
+function safeParseTree(parser: TsParser, text: string): TsTree | null {
+  try {
+    return parser.parse(text) as TsTree;
+  } catch {
+    wasmPoisoned = true;
+    return null;
+  }
 }
 
 // --------------------------- ast-grep matcher ---------------------------
@@ -154,7 +223,8 @@ const UNWRAP = new Set(['module', 'program', 'source_file', 'expression_statemen
 const u16ToByte = (s: string, i: number): number => Buffer.byteLength(s.slice(0, i), 'utf8');
 
 function compilePattern(parser: TsParser, src: string): TsNode {
-  const t = parser.parse(toIdent(src));
+  const t = safeParseTree(parser, toIdent(src));
+  if (!t) return { type: ' NOMATCH', text: '', namedChildCount: 0, childCount: 0, namedChildren: [] } as unknown as TsNode;
   let n = t.rootNode;
   while (UNWRAP.has(n.type)) {
     const k = n.namedChildren.find((c: TsNode) => c.type !== 'ERROR' && !c.isMissing);
@@ -259,7 +329,7 @@ function globToRe(glob: string): RegExp {
 // --------------------------- public engine ops ---------------------------
 
 export async function astGrep(opts: AstFindOptions): Promise<AstFindResult> {
-  await ensureReady();
+  await ensureNativeReady();
   const files = opts.path ? listFiles(opts.path, opts.glob) : [];
   const matches: AstFindMatch[] = [];
   let filesWith = 0;
@@ -270,7 +340,8 @@ export async function astGrep(opts: AstFindOptions): Promise<AstFindResult> {
     if (!parser) continue;
     let code: string;
     try { code = fs.readFileSync(f, 'utf8'); } catch { continue; }
-    const t = parser.parse(code);
+    const t = safeParseTree(parser, code);
+    if (!t) { parseErrors.push(f); continue; }
     let anyMatch = false;
     for (const pat of opts.patterns ?? []) {
       const P = compilePattern(parser, pat);
@@ -284,15 +355,18 @@ export async function astGrep(opts: AstFindOptions): Promise<AstFindResult> {
         }
         for (let i = 0; i < n.childCount; i += 1) stack.push(n.child(i));
       }
+      P.tree?.delete(); // P is a TsNode, to free it we need its tree if exposed, but web-tree-sitter nodes don't own the tree. compilePattern returns rootNode. We need to patch compilePattern.
     }
     if (anyMatch) filesWith += 1;
+    t.delete();
+
   }
   const limit = opts.limit ?? matches.length;
   return { matches: matches.slice(0, limit), totalMatches: matches.length, filesWithMatches: filesWith, filesSearched: files.length, limitReached: matches.length > limit, parseErrors: parseErrors.length ? parseErrors : undefined };
 }
 
 export async function astEditDry(opts: AstReplaceOptions): Promise<AstReplaceResult> {
-  await ensureReady();
+  await ensureNativeReady();
   const files = opts.path ? listFiles(opts.path, opts.glob) : [];
   const changes: AstReplaceChange[] = [];
   const fileChanges: { path: string; count: number }[] = [];
@@ -302,7 +376,8 @@ export async function astEditDry(opts: AstReplaceOptions): Promise<AstReplaceRes
     if (!parser) continue;
     let code: string;
     try { code = fs.readFileSync(f, 'utf8'); } catch { continue; }
-    const t = parser.parse(code);
+    const t = safeParseTree(parser, code);
+    if (!t) continue;
     let count = 0;
     for (const [pat, tmpl] of Object.entries(opts.rewrites ?? {})) {
       const P = compilePattern(parser, pat);
@@ -319,20 +394,31 @@ export async function astEditDry(opts: AstReplaceOptions): Promise<AstReplaceRes
         }
         for (let i = 0; i < n.childCount; i += 1) stack.push(n.child(i));
       }
+      P.tree?.delete();
     }
     if (count) fileChanges.push({ path: f, count });
+    t.delete();
+
   }
   return { changes, fileChanges, totalReplacements: changes.length, filesTouched: fileChanges.length, filesSearched: files.length, applied: false, limitReached: false };
 }
 
 export async function summarize(opts: Record<string, unknown>): Promise<Record<string, unknown>> {
-  await ensureReady();
+  await ensureNativeReady();
   const code = String(opts.code ?? '');
   const alias = (opts.lang as string) || extLang(opts.path as string);
   const parser = await parserFor(alias);
   if (!parser) return { parsed: false, language: alias ?? 'generic', totalLines: code.split('\n').length, segments: [] };
-  const t = parser.parse(code);
-  const DEF = new Set(['function_definition', 'class_definition', 'method', 'function_declaration', 'method_declaration', 'type_declaration', 'class']);
+  const t = safeParseTree(parser, code);
+  if (!t) return { parsed: false, language: alias ?? 'generic', totalLines: code.split('\n').length, segments: [] };
+  const DEF = new Set([
+    'function_definition', 'class_definition', 'method', 'function_declaration', 'method_declaration',
+    'type_declaration', 'class',
+    // TS/JS type-level declarations the outline was silently dropping (it surfaced only
+    // function/class, hiding ~83% of a types-heavy file's top-level surface — a navigation hazard):
+    'class_declaration', 'abstract_class_declaration', 'interface_declaration',
+    'type_alias_declaration', 'enum_declaration',
+  ]);
   const segments: unknown[] = [];
   let errs = 0;
   const walk = (n: TsNode) => {
@@ -341,6 +427,7 @@ export async function summarize(opts: Record<string, unknown>): Promise<Record<s
     for (let i = 0; i < n.childCount; i += 1) walk(n.child(i));
   };
   walk(t.rootNode);
+  t.delete();
   return { parsed: errs === 0, language: alias, totalLines: code.split('\n').length, segments };
 }
 
@@ -373,16 +460,19 @@ export async function nativeGlob(opts: Record<string, unknown>): Promise<GlobRes
 
 /** Syntax validity via web-tree-sitter. realParser:false means no grammar (cannot judge); parsed reflects zero ERROR/MISSING nodes. */
 export async function validate(code: string, lang?: string): Promise<{ realParser: boolean; errorCount: number; parsed: boolean }> {
-  await ensureReady();
+  await ensureNativeReady();
   const parser = await parserFor(lang);
   if (!parser) return { realParser: false, errorCount: -1, parsed: false };
-  const t = parser.parse(code);
+  const t = safeParseTree(parser, code);
+  if (!t) return { realParser: false, errorCount: -1, parsed: false };
   let e = 0;
-  const w = (n: any): void => {
+  const stack: TsNode[] = [t.rootNode as TsNode];
+  while (stack.length) {
+    const n = stack.pop() as TsNode;
     if (n.type === 'ERROR' || n.isMissing) e += 1;
-    for (let i = 0; i < n.childCount; i += 1) w(n.child(i));
-  };
-  w(t.rootNode);
+    for (let i = 0; i < n.childCount; i += 1) stack.push(n.child(i) as TsNode);
+  }
+  t.delete();
   return { realParser: true, errorCount: e, parsed: e === 0 };
 }
 
@@ -413,10 +503,11 @@ export async function astNodes(
   lang?: string,
   types?: Set<string>,
 ): Promise<AstNode[] | null> {
-  await ensureReady();
+  await ensureNativeReady();
   const parser = await parserFor(lang);
   if (!parser) return null;
-  const t = parser.parse(content);
+  const t = safeParseTree(parser, content);
+  if (!t) return null;
   const out: AstNode[] = [];
   const stack: TsNode[] = [t.rootNode as TsNode];
   while (stack.length) {
@@ -435,6 +526,7 @@ export async function astNodes(
     }
     for (let i = 0; i < n.childCount; i += 1) stack.push(n.child(i) as TsNode);
   }
+  t.delete();
   return out;
 }
 

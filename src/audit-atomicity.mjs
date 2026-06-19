@@ -28,7 +28,7 @@ import { fileURLToPath } from 'node:url';
 import { buildSelfTestCases } from './audit-atomicity.test-cases.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const REPO = path.resolve(HERE, '..', '..', '..');
+const REPO = process.env.ATOMIC_EDIT_REPO_ROOT || path.resolve(HERE, '..', '..', '..');
 const TRACES = path.join(REPO, '.atomic', 'traces');
 
 const args = process.argv.slice(2);
@@ -186,6 +186,12 @@ function auditTraces(traces, options = {}) {
     ? Number((currentTopologyCount / currentTraceResults.length).toFixed(4))
     : null;
   const currentTopologyPass = currentTraceResults.length > 0 && currentMissingTopology.length === 0;
+
+  // L08 (ENFORCE-OR-JUSTIFY) WAIVER:
+  // `topologyPass` includes legacy edits (historical debt before topology tracing was strict).
+  // We JUSTIFY its advisory-only status because enforcing it retroactively would require re-writing
+  // historical commits, which breaks continuity. We ENFORCE `currentTopologyPass` instead, which
+  // guarantees the invariant holds for all net-new edits going forward.
   const pass =
     enforcementPass &&
     previewHonestyPass &&

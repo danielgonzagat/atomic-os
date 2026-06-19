@@ -17,7 +17,7 @@ function record(name, ok, detail = {}) {
 const proofRunIndex = source.indexOf('const proofs = await runProofCommands(proofCommands);');
 const failedIndex = source.indexOf('const failed = proofs.filter((p) => !p.ok);');
 const effectsBeforePromotionIndex = source.indexOf('const effectsBeforePromotion = diffEffect(snap);');
-const candidateSnapIndex = source.indexOf('const candidateSnap = captureEffectSnapshot(selfRoot);');
+const candidateSnapIndex = source.indexOf('const candidateSnap = captureSelfExpansionSnapshot(selfRoot);');
 const receiptIndex = source.indexOf('const promotionReceipt = buildRealSelfExpansionPromotionReceipt');
 const rejectIndex = source.indexOf("promotionReceipt.decision !== 'promote'");
 const archiveIndex = source.indexOf('const selfEvolutionArchive = appendRealSelfExpansionArchive');

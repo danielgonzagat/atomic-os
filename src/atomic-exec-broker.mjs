@@ -31,6 +31,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { installParentDeathReaper } from './parent-death-reaper.mjs';
+import { startNetworkProxy, stopNetworkProxy, saveProxyRecordings } from './network-proxy.mjs';
 
 const SANDBOX_EXEC = '/usr/bin/sandbox-exec';
 const brokerArgs = process.argv.slice(2);
@@ -39,7 +40,7 @@ const endpointValue =
   brokerArgs.find((a) => a !== '--no-sandbox' && !a.startsWith('ATOMIC_')) ||
   process.env.ATOMIC_EXEC_BROKER_SOCKET;
 const allowedRoot = canonicalPathForContainment(
-  process.env.ATOMIC_EXEC_BROKER_ROOT ? process.env.ATOMIC_EXEC_BROKER_ROOT : process.cwd(),
+  process.env.ATOMIC_EXEC_BROKER_ROOT || process.env.ATOMIC_EDIT_REPO_ROOT || process.cwd(),
 );
 const allowedScratchRoot = canonicalPathForContainment(path.join(realOr(os.tmpdir()), 'atomic-exec'));
 const allowedRootScratchRoot = canonicalPathForContainment(path.join(allowedRoot, 'atomic-exec'));
@@ -47,9 +48,44 @@ if (!endpointValue) {
   process.stderr.write('[atomic-exec-broker] endpoint required (argv[2] or ATOMIC_EXEC_BROKER_SOCKET)\n');
   process.exit(2);
 }
-if (!noSandbox && !fs.existsSync(SANDBOX_EXEC)) {
-  process.stderr.write('[atomic-exec-broker] requires macOS sandbox-exec (or --no-sandbox for passthrough)\n');
+function bwrapAvailable() {
+  // Detect bubblewrap by scanning PATH for the binary (sync fs probe, like
+  // sandboxExecAvailable) — never spawnSync, so the broker import surface stays
+  // async-only and the concurrent-proof-client invariant (validator lattice) holds.
+  try {
+    const dirs = (process.env.PATH || '').split(path.delimiter);
+    return dirs.some((d) => d && fs.existsSync(path.join(d, 'bwrap')));
+  } catch {
+    return false;
+  }
+}
+
+const isLinux = process.platform === 'linux';
+const sandboxExecAvailable = fs.existsSync(SANDBOX_EXEC);
+const bwrapUsable = isLinux && bwrapAvailable();
+
+if (!noSandbox && !sandboxExecAvailable && !bwrapUsable) {
+  process.stderr.write('[atomic-exec-broker] requires macOS sandbox-exec or Linux bubblewrap (or --no-sandbox for passthrough)\n');
   process.exit(78);
+}
+
+function bubblewrapArgs(effectRoot, tempRoot) {
+  const args = [
+    '--ro-bind', '/', '/',
+    '--unshare-net',
+    '--dev', '/dev',
+    '--proc', '/proc',
+    '--tmpfs', '/tmp',
+  ];
+  if (effectRoot) {
+    const r = fs.realpathSync(effectRoot);
+    args.push('--bind', r, r);
+  }
+  if (tempRoot) {
+    const t = fs.realpathSync(tempRoot);
+    args.push('--bind', t, t);
+  }
+  return args;
 }
 
 // Defense-in-depth mirror of the invariant LAWS (server-tools-exec FORBIDDEN is
@@ -208,10 +244,16 @@ function tempEnv(tempRoot) {
   };
 }
 
+function tempRootForRequest(runCwd, eRoot, req) {
+  if (typeof req.tempRoot === 'string' && req.tempRoot.length > 0) return req.tempRoot;
+  if (eRoot) return eRoot;
+  return Object.prototype.hasOwnProperty.call(req, 'effectRoot') ? null : runCwd;
+}
+
 function runPassthrough(command, runCwd, eRoot, req) {
   return new Promise((resolve) => {
-    const tempRoot = req.tempRoot || eRoot || runCwd;
-    fs.mkdirSync(tempRoot, { recursive: true });
+    const tempRoot = tempRootForRequest(runCwd, eRoot, req);
+    if (tempRoot) fs.mkdirSync(tempRoot, { recursive: true });
     const child = spawn('/bin/bash', ['-c', command], {
       cwd: runCwd,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -252,13 +294,19 @@ function runPassthrough(command, runCwd, eRoot, req) {
 
 function runSandboxed(command, runCwd, eRoot, profileName, req) {
   return new Promise((resolve) => {
-    const tempRoot = req.tempRoot || eRoot || runCwd;
-    fs.mkdirSync(tempRoot, { recursive: true });
-    const child = spawn(SANDBOX_EXEC, ['-p', profile(eRoot, profileName, tempRoot), '/bin/bash', '-c', command], {
-      cwd: runCwd,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, ...(req.env || {}), ...tempEnv(tempRoot) },
-    });
+    const tempRoot = tempRootForRequest(runCwd, eRoot, req);
+    if (tempRoot) fs.mkdirSync(tempRoot, { recursive: true });
+    const child = isLinux
+      ? spawn('bwrap', [...bubblewrapArgs(eRoot, tempRoot), '/bin/bash', '-c', command], {
+          cwd: runCwd,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          env: { ...process.env, ...(req.env || {}), ...tempEnv(tempRoot) },
+        })
+      : spawn(SANDBOX_EXEC, ['-p', profile(eRoot, profileName, tempRoot), '/bin/bash', '-c', command], {
+          cwd: runCwd,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          env: { ...process.env, ...(req.env || {}), ...tempEnv(tempRoot) },
+        });
     let stdout = '';
     let stderr = '';
     let settled = false;
@@ -315,21 +363,64 @@ async function handle(req) {
   }
   const profileName = requestedProfile(req, c);
   if (!profileName) return { ok: false, error: 'broker: unsupported execution profile' };
-  const runCwd = req.cwd ? path.resolve(req.cwd) : allowedRoot;
-  if (!within(runCwd, allowedRoot)) return { ok: false, error: 'broker: cwd escapes allowed root' };
+
+  // Use workspaceRoot from request if provided, otherwise fall back to allowedRoot
+  const workspaceRoot = req.workspaceRoot ? path.resolve(req.workspaceRoot) : null;
+  const effectiveRoot = workspaceRoot || allowedRoot;
+
+  const runCwd = req.cwd ? path.resolve(req.cwd) : effectiveRoot;
+  if (!within(runCwd, effectiveRoot)) return { ok: false, error: 'broker: cwd escapes allowed root' };
   const hasEffectRoot = Object.prototype.hasOwnProperty.call(req, 'effectRoot');
   const eRoot = hasEffectRoot
     ? (typeof req.effectRoot === 'string' && req.effectRoot.length > 0 ? path.resolve(req.effectRoot) : null)
     : runCwd;
-  if (eRoot && !within(eRoot, allowedRoot)) return { ok: false, error: 'broker: effectRoot escapes allowed root' };
+  if (eRoot && !within(eRoot, effectiveRoot)) return { ok: false, error: 'broker: effectRoot escapes allowed root' };
   const tRoot =
     typeof req.tempRoot === 'string' && req.tempRoot.length > 0 ? path.resolve(req.tempRoot) : null;
   if (tRoot && !within(tRoot, allowedScratchRoot) && !within(tRoot, allowedRootScratchRoot)) {
     return { ok: false, error: 'broker: tempRoot escapes atomic scratch roots' };
   }
   const runReq = tRoot ? { ...req, tempRoot: tRoot } : req;
-  if (noSandbox) return runPassthrough(command, runCwd, eRoot, runReq);
-  return runSandboxed(command, runCwd, eRoot, profileName, runReq);
+
+  // ── Tier-C network proxy ──────────────────────────────────────────────
+  let networkProxy = null;
+  const networkMode = req.networkMode || process.env.ATOMIC_NETWORK_MODE;
+  const proxyStorageDir = req.proxyStorageDir || path.join(allowedRoot, '.atomic', 'network-recordings');
+  if (networkMode === 'record' || networkMode === 'replay') {
+    try {
+      networkProxy = await startNetworkProxy({ mode: networkMode, storageDir: proxyStorageDir });
+      if (runReq.env) {
+        runReq.env.HTTP_PROXY = `http://127.0.0.1:${networkProxy.port}`;
+        runReq.env.HTTPS_PROXY = `http://127.0.0.1:${networkProxy.port}`;
+      } else {
+        runReq.env = { HTTP_PROXY: `http://127.0.0.1:${networkProxy.port}`, HTTPS_PROXY: `http://127.0.0.1:${networkProxy.port}` };
+      }
+    } catch (err) {
+      return { ok: false, error: `network proxy failed to start: ${err.message}` };
+    }
+  }
+
+  let result;
+  if (noSandbox) {
+    result = runPassthrough(command, runCwd, eRoot, runReq);
+  } else {
+    result = runSandboxed(command, runCwd, eRoot, profileName, runReq);
+  }
+
+  // Attach proxy recordings to result
+  if (networkProxy) {
+    const reply = await result;
+    if (networkMode === 'record') {
+      const saved = saveProxyRecordings(networkProxy);
+      reply.proxyRecordings = Array.from(networkProxy.recordings.values());
+      reply.proxyRecordingsSaved = saved;
+      reply.proxyStorageDir = proxyStorageDir;
+    }
+    await stopNetworkProxy(networkProxy);
+    return reply;
+  }
+
+  return result;
 }
 
 function frame(obj) {

@@ -59,7 +59,7 @@ function sourceAssertions() {
       converge.includes('code: z.string().optional()'),
     convergeComposesSameFileMutations:
       converge.includes('const targetsByFile = new Map') &&
-      converge.includes('const current = existing?.newText ?? readUtf8(t.absPath)') &&
+      converge.includes('const current = existing?.newText ?? (fs.existsSync(t.absPath) ? readUtf8(t.absPath) : \'\')') &&
       converge.includes('targetsByFile.set(workspaceRelPath'),
     convergeUsesExistingGatesAfterExpansion:
       converge.includes('const mutations: Mutation[] = targets.map') &&

@@ -49,6 +49,11 @@ function launcherSourceAssertions() {
       source.includes('REFUSED: atomic MCP requires the atomic host sandbox boundary') &&
       source.includes('explicit degraded-mode development/CI admission') &&
       !source.includes('host sandbox not available — auto-enabling SELF-HOSTED mode'),
+    requiresFileBrokerLivenessMarker:
+      source.includes('broker.json') &&
+      source.includes('atomic-file-broker-v1') &&
+      source.includes('fileBrokerMarkerAlive') &&
+      source.includes('process.kill(marker.pid, 0)'),
   };
 }
 
@@ -85,7 +90,7 @@ function startBroker() {
       }
     });
     const poll = setInterval(() => {
-      if (stdout.includes('ATOMIC_BROKER_READY') && fs.existsSync(path.join(brokerDir, 'requests'))) {
+      if (stdout.includes('ATOMIC_BROKER_READY') && fs.existsSync(path.join(brokerDir, 'broker.json'))) {
         clearTimeout(deadline);
         clearInterval(poll);
         resolve({ proc, socketPath, cleanupPath: brokerDir, stdout, stderr });
@@ -270,7 +275,20 @@ async function main() {
       : null;
     let socketReady = false;
     if (inheritedSocketForHost.startsWith('file://')) {
-      socketReady = fs.existsSync(path.join(fileURLToPath(inheritedSocketForHost), 'requests'));
+      try {
+        const dir = fileURLToPath(inheritedSocketForHost);
+        const marker = JSON.parse(fs.readFileSync(path.join(dir, 'broker.json'), 'utf8'));
+        if (marker?.protocol === 'atomic-file-broker-v1' && Number.isInteger(marker?.pid) && marker.pid > 1) {
+          try {
+            process.kill(marker.pid, 0);
+            socketReady = fs.existsSync(path.join(dir, 'requests')) && fs.existsSync(path.join(dir, 'responses'));
+          } catch (error) {
+            socketReady = error?.code === 'EPERM';
+          }
+        }
+      } catch {
+        socketReady = false;
+      }
     } else {
       try {
         socketReady = fs.statSync(inheritedSocketForHost).isSocket();
@@ -289,6 +307,9 @@ async function main() {
       ATOMIC_SINGLE_TOOL_CALL: '',
       ATOMIC_SINGLE_TOOL_NAME: '',
       ATOMIC_SINGLE_TOOL_ARGS_JSON: '',
+      ATOMIC_EDIT_MCP_SELF_HOSTED: '',
+      ATOMIC_EDIT_ALLOW_SELF_HOSTED: '',
+      ATOMIC_RECOVER_HOST_FROM_STATE: '',
     };
     const refuse79 = withBrokerStateSuppressed(() =>
       childProcess.spawnSync(launcher, [], {
@@ -347,6 +368,9 @@ async function main() {
         ATOMIC_SINGLE_TOOL_CALL: "",
         ATOMIC_SINGLE_TOOL_NAME: "",
         ATOMIC_SINGLE_TOOL_ARGS_JSON: "",
+        ATOMIC_EDIT_MCP_SELF_HOSTED: "",
+        ATOMIC_EDIT_ALLOW_SELF_HOSTED: "",
+        ATOMIC_RECOVER_HOST_FROM_STATE: "",
         ATOMIC_HOST_SANDBOX: "macos-sandbox-exec",
         ATOMIC_HOST_ATOMIC_ONLY: "1",
         ATOMIC_HOST_WRITE_ROOT: repoRoot,

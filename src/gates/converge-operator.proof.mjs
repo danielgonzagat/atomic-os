@@ -50,9 +50,9 @@ const check = (name, cond) => {
   else { fail += 1; console.log('  FAIL ', name); }
 };
 
-// A tiny isolated repo root: keeps reachability's disk walk small + deterministic
-// (not capped → it actually decides), and ts-morph (imported by binding-gate.js
-// relative to its OWN location) + node: builtins resolve regardless of this root.
+// A tiny isolated repo root keeps disk-backed write gates small + deterministic;
+// ts-morph (imported by binding-gate.js relative to its OWN location) + node:
+// builtins resolve regardless of this root.
 const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'converge-proof-'));
 fs.mkdirSync(path.join(repoRoot, '.git'), { recursive: true }); // a real repo-root marker
 const cleanup = () => { try { fs.rmSync(repoRoot, { recursive: true, force: true }); } catch { /* best effort */ } };
@@ -61,7 +61,7 @@ try {
   // ── GREEN-ALREADY — no work to do ──────────────────────────────────────────
   {
     // Every name binds (local const + known global), no relative import → already green.
-    // Named *.test.ts so reachability treats it as a ROOT (no orphan red to muddy the test).
+    // Named *.test.ts to mirror normal generated intent proof modules.
     const rel = 'green.test.ts';
     const text = ['export const x = 1;', 'export function go() { return x + 1; }', ''].join('\n');
     const r = await converge(repoRoot, new Map([[rel, text]]));
@@ -137,7 +137,7 @@ try {
 
   // ── FORMAT (opt-in format-fixpoint) — wire-green but non-canonical ──────────
   {
-    // *.test.ts → reachability treats it as a ROOT (no orphan red), so it is wire-green
+    // *.test.ts mirrors normal generated intent proof modules, so it is wire-green
     // but deliberately NOT prettier-canonical. format:true must drain the formatting
     // WITHOUT changing the wire facts (converged / finalReds / appliedEdits).
     const frel = 'format.test.ts';

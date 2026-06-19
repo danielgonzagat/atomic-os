@@ -68,7 +68,7 @@ const DIRECTORY_INLINE_CONTEXT_BUDGET = 14000;
 const DIRECTORY_INLINE_FILE_LIMIT = 6;
 const LARGE_DIR_LIMIT = 200; // files — show summary not full listing
 const MAX_SYMBOLS_INLINE = 25; // compact summary cutoff
-const SHALLOW_TREE_DEPTH = 2;
+const SHALLOW_TREE_DEPTH = 3;
 const SHALLOW_TREE_ENTRY_LIMIT = 80;
 const SHALLOW_TREE_SKIP = new Set(['.git', 'node_modules', 'dist', 'dist-lkg', 'coverage', '.next', '.turbo']);
 const MISSING_PATH_SCAN_LIMIT = 500;
@@ -310,6 +310,22 @@ function collectShallowTreeFiles(tree: DirectoryShallowTree, out: string[] = [])
   return out;
 }
 
+function isReadcodeSourceBatchCandidate(filePath: string): boolean {
+  const normalized = filePath.split(path.sep).join('/');
+  const lower = normalized.toLowerCase();
+  const ext = path.posix.extname(lower);
+  if (!['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'].includes(ext)) return false;
+  return (
+    lower.startsWith('src/') ||
+    lower.includes('/src/') ||
+    lower.includes('/__tests__/') ||
+    lower.includes('/test/') ||
+    lower.includes('/tests/') ||
+    lower.endsWith('.test' + ext) ||
+    lower.endsWith('.spec' + ext)
+  );
+}
+
 function readcodeBatchNextForDirectory(
   dir: string,
   entries: Array<{ name: string; type: string }>,
@@ -322,17 +338,20 @@ function readcodeBatchNextForDirectory(
     seen.add(filePath);
     items.push({ path: filePath });
   };
+  const treeFiles = shallowTree ? collectShallowTreeFiles(shallowTree) : [];
+  const sourceBatchFiles = treeFiles.filter(isReadcodeSourceBatchCandidate);
+  for (const filePath of sourceBatchFiles) addPath(filePath);
   for (const entry of entries) {
     if (entry.type === 'file') addPath(joinReadPath(dir || '.', entry.name));
   }
-  if (items.length < 2 && shallowTree) {
-    for (const filePath of collectShallowTreeFiles(shallowTree)) addPath(filePath);
+  if (items.length < 2) {
+    for (const filePath of treeFiles) addPath(filePath);
   }
   if (items.length < 2) return null;
   return {
     tool: 'code_readcode_batch',
     reason:
-      'Directory exposes a small file cluster in its shallow tree; batch-read these paths before issuing repeated single-path code_readcode calls.',
+      'Directory exposes a small source/test file cluster in its shallow tree; batch-read these paths before issuing repeated single-path code_readcode calls.',
     items,
   };
 }

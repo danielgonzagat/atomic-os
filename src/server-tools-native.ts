@@ -30,7 +30,7 @@ import { resolveSafeTarget, REPO_ROOT } from './guard.js';
 import { readUtf8, guardSha } from './server-helpers-io.js';
 import { ok, fail, commit, type ToolOk } from './server-helpers-result.js';
 import {
-  ensureReady,
+  ensureNativeReady,
   nativeAvailable,
   nativeLanguages,
   astGrep,
@@ -55,7 +55,7 @@ function offsetToPos(text: string, offset: number): { line: number; column: numb
 }
 
 async function nativeReadyOrFail(): Promise<ToolOk | null> {
-  const ready = await ensureReady();
+  const ready = await ensureNativeReady();
   if (!ready || !nativeAvailable()) {
     return fail(
       'universal engine (web-tree-sitter) unavailable — its WASM runtime or grammar failed to load; ' +
@@ -216,7 +216,7 @@ export function registerToolsNative(server: McpServer): void {
     },
     async () => {
       try {
-        const ready = await ensureReady();
+        const ready = await ensureNativeReady();
         return ok({
           available: ready && nativeAvailable(),
           languageCount: nativeLanguages().length,

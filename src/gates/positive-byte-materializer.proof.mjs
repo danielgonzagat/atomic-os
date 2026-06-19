@@ -79,6 +79,12 @@ function lastJson(result) {
   }
 }
 
+const TOOL_CALL_TIMEOUT_MS = 180000;
+
+async function callTool(client, request) {
+  return client.callTool(request, undefined, { timeout: TOOL_CALL_TIMEOUT_MS });
+}
+
 function receiptGate(receipt, id) {
   const gates = receipt?.gateDecisionTree?.gates;
   return Array.isArray(gates) ? gates.find((gate) => gate?.id === id) : undefined;
@@ -133,7 +139,9 @@ async function main() {
     stderr: 'inherit',
   });
   const client = new Client({ name: 'positive-byte-materializer-proof', version: '1.0.0' });
-  const baseRel = path.join('scripts', 'mcp', 'atomic-edit', `.smoke-positive-byte-proof-${process.pid}`);
+  const proofProjectRel = path.join('tmp', `positive-byte-materializer-proof-${process.pid}`);
+  const proofProjectAbs = path.join(repoRoot, proofProjectRel);
+  const baseRel = path.join(proofProjectRel, 'src');
   const previewRel = path.join(baseRel, 'preview-large.ts');
   const commitRel = path.join(baseRel, 'commit-large.ts');
   const tamperRel = path.join(baseRel, 'tampered-staging.ts');
@@ -156,6 +164,14 @@ async function main() {
   const content = chunks.join('');
   const contentSha256 = sha(content);
 
+  fs.rmSync(proofProjectAbs, { recursive: true, force: true });
+  fs.mkdirSync(proofProjectAbs, { recursive: true });
+  fs.writeFileSync(path.join(proofProjectAbs, 'package.json'), '{"name":"atomic-positive-byte-materializer-proof","private":true}\n');
+  fs.writeFileSync(
+    path.join(proofProjectAbs, 'tsconfig.json'),
+    '{\n  "compilerOptions": {\n    "target": "ES2022",\n    "module": "commonjs",\n    "strict": true,\n    "noEmit": true,\n    "skipLibCheck": true\n  },\n  "include": ["src/**/*.ts"]\n}\n',
+  );
+
   try {
     await client.connect(transport);
     const listed = await client.listTools();
@@ -172,7 +188,7 @@ async function main() {
       { names: [...names].filter((name) => name.includes('positive_bytes')) },
     );
 
-    const acceptedPreDiskVerifyBegin = await client.callTool({
+    const acceptedPreDiskVerifyBegin = await callTool(client, {
       name: 'atomic_positive_bytes_begin',
       arguments: {
         file: path.join(baseRel, 'pre-disk-verify.ts'),
@@ -190,7 +206,7 @@ async function main() {
       acceptedPreDiskVerifyBeginBody,
     );
     if (typeof acceptedPreDiskVerifyBeginBody.sessionId === 'string') {
-      await client.callTool({
+      await callTool(client, {
         name: 'atomic_positive_bytes_abort',
         arguments: { sessionId: acceptedPreDiskVerifyBeginBody.sessionId },
       });
@@ -198,7 +214,7 @@ async function main() {
 
     const uncoveredTypecheckRel = path.join('tmp', `.smoke-positive-byte-uncovered-typecheck-${process.pid}.ts`);
     const uncoveredTypecheckAbs = path.join(repoRoot, uncoveredTypecheckRel);
-    const uncoveredTypecheckBegin = await client.callTool({
+    const uncoveredTypecheckBegin = await callTool(client, {
       name: 'atomic_positive_bytes_begin',
       arguments: {
         file: uncoveredTypecheckRel,
@@ -211,7 +227,7 @@ async function main() {
     const uncoveredTypecheckSessionId = uncoveredTypecheckBeginBody.sessionId;
     if (typeof uncoveredTypecheckSessionId === 'string') {
       const uncoveredTypecheckText = 'export const UNCOVERED_TYPECHECK = 1;\n';
-      await client.callTool({
+      await callTool(client, {
         name: 'atomic_positive_bytes_append',
         arguments: {
           sessionId: uncoveredTypecheckSessionId,
@@ -220,7 +236,7 @@ async function main() {
           sha256: sha(uncoveredTypecheckText),
         },
       });
-      const uncoveredTypecheckCommit = await client.callTool({
+      const uncoveredTypecheckCommit = await callTool(client, {
         name: 'atomic_positive_bytes_commit',
         arguments: { sessionId: uncoveredTypecheckSessionId },
       });
@@ -246,7 +262,7 @@ async function main() {
         uncoveredTypecheckCommitBody,
       );
       if (uncoveredTypecheckReceipt && names.has('atomic_positive_bytes_verify_receipt')) {
-        const verifiedUncoveredTypecheckReceipt = await client.callTool({
+        const verifiedUncoveredTypecheckReceipt = await callTool(client, {
           name: 'atomic_positive_bytes_verify_receipt',
           arguments: { receipt: uncoveredTypecheckReceipt, requireCurrentTarget: false },
         });
@@ -268,7 +284,7 @@ async function main() {
               failedFactsHash(verifiedUncoveredTypecheckReceiptBody.failedGateFacts),
           verifiedUncoveredTypecheckReceiptBody,
         );
-        const verifiedReorderedUncoveredTypecheckReceipt = await client.callTool({
+        const verifiedReorderedUncoveredTypecheckReceipt = await callTool(client, {
           name: 'atomic_positive_bytes_verify_receipt',
           arguments: {
             receipt: reorderObjectKeysDescending(uncoveredTypecheckReceipt),
@@ -299,7 +315,7 @@ async function main() {
             ),
           },
         });
-        const rejectedForgedRejectedReplayReceipt = await client.callTool({
+        const rejectedForgedRejectedReplayReceipt = await callTool(client, {
           name: 'atomic_positive_bytes_verify_receipt',
           arguments: { receipt: forgedRejectedUncoveredTypecheckReceipt, requireCurrentTarget: false },
         });
@@ -328,7 +344,7 @@ async function main() {
       record('rejection receipt verifier rejects self-consistent receipts with forged replay facts', false, uncoveredTypecheckBeginBody);
     }
 
-    const previewBegin = await client.callTool({
+    const previewBegin = await callTool(client, {
       name: 'atomic_positive_bytes_begin',
       arguments: {
         file: previewRel,
@@ -343,7 +359,7 @@ async function main() {
     record('preview session starts without creating directories', previewBeginBody.ok === true && typeof previewSessionId === 'string' && !fs.existsSync(path.dirname(previewAbs)), previewBeginBody);
 
     for (const [index, text] of chunks.entries()) {
-      const appended = await client.callTool({
+      const appended = await callTool(client, {
         name: 'atomic_positive_bytes_append',
         arguments: { sessionId: previewSessionId, index, text, sha256: sha(text) },
       });
@@ -351,7 +367,7 @@ async function main() {
       record(`preview chunk ${index} accepted`, body.ok === true && body.index === index && body.chunkSha256 === sha(text), body);
     }
 
-    const previewCommit = await client.callTool({
+    const previewCommit = await callTool(client, {
       name: 'atomic_positive_bytes_commit',
       arguments: { sessionId: previewSessionId },
     });
@@ -381,14 +397,14 @@ async function main() {
         previewReceipt.preDiskVerify?.kind === 'typecheck' &&
         previewReceipt.preDiskVerify?.passed === true &&
         previewReceipt.preDiskVerify?.preDisk === true &&
-        previewReceipt.preDiskVerify?.replayCwd === sourceDir &&
+        previewReceipt.preDiskVerify?.replayCwd === proofProjectAbs &&
         Array.isArray(previewReceipt.preDiskVerify?.replayArgv) &&
         previewReceipt.preDiskVerify.replayArgv.join('\u0000') === ['--noEmit', '-p', 'tsconfig.json'].join('\u0000') &&
         previewReceipt.preDiskVerify?.targetRelPath === previewRel &&
         previewReceipt.materialization?.preDiskVerify?.kind === 'typecheck' &&
         receiptGate(previewReceipt, 'declared.verify.pre_disk')?.status === 'passed' &&
         receiptGate(previewReceipt, 'declared.verify.pre_disk')?.facts?.requestedVerify === 'typecheck' &&
-        receiptGate(previewReceipt, 'declared.verify.pre_disk')?.facts?.replayCwd === sourceDir &&
+        receiptGate(previewReceipt, 'declared.verify.pre_disk')?.facts?.replayCwd === proofProjectAbs &&
         Array.isArray(receiptGate(previewReceipt, 'declared.verify.pre_disk')?.facts?.replayArgv) &&
         receiptGate(previewReceipt, 'declared.verify.pre_disk')?.facts?.replayArgv.join('\u0000') === ['--noEmit', '-p', 'tsconfig.json'].join('\u0000') &&
         receiptGate(previewReceipt, 'declared.verify.pre_disk')?.facts?.targetRelPath === previewRel &&
@@ -403,7 +419,7 @@ async function main() {
     );
 
     if (names.has('atomic_positive_bytes_verify_receipt')) {
-      const verifiedPreviewReceipt = await client.callTool({
+      const verifiedPreviewReceipt = await callTool(client, {
         name: 'atomic_positive_bytes_verify_receipt',
         arguments: { receipt: previewReceipt, requireCurrentTarget: false },
       });
@@ -415,7 +431,7 @@ async function main() {
           verifiedPreviewReceiptBody.contentSha256 === contentSha256,
         verifiedPreviewReceiptBody,
       );
-      const verifiedReorderedPreviewReceipt = await client.callTool({
+      const verifiedReorderedPreviewReceipt = await callTool(client, {
         name: 'atomic_positive_bytes_verify_receipt',
         arguments: {
           receipt: reorderObjectKeysDescending(previewReceipt),
@@ -446,7 +462,7 @@ async function main() {
           ),
         },
       });
-      const rejectedForgedPreDiskVerifyReceipt = await client.callTool({
+      const rejectedForgedPreDiskVerifyReceipt = await callTool(client, {
         name: 'atomic_positive_bytes_verify_receipt',
         arguments: { receipt: forgedPreDiskVerifyReceipt, requireCurrentTarget: false },
       });
@@ -478,7 +494,7 @@ async function main() {
           ),
         },
       });
-      const rejectedForgedReplayReceipt = await client.callTool({
+      const rejectedForgedReplayReceipt = await callTool(client, {
         name: 'atomic_positive_bytes_verify_receipt',
         arguments: { receipt: forgedReplayReceipt, requireCurrentTarget: false },
       });
@@ -490,7 +506,7 @@ async function main() {
         rejectedForgedReplayReceiptBody,
       );
       const relativeReplayCwdFacts = {
-        replayCwd: path.relative(repoRoot, sourceDir),
+        replayCwd: path.relative(repoRoot, proofProjectAbs),
         replayArgv: ['--noEmit', '-p', 'tsconfig.json'],
         targetRelPath: previewRel,
       };
@@ -510,7 +526,7 @@ async function main() {
           ),
         },
       });
-      const rejectedRelativeReplayCwdReceipt = await client.callTool({
+      const rejectedRelativeReplayCwdReceipt = await callTool(client, {
         name: 'atomic_positive_bytes_verify_receipt',
         arguments: { receipt: relativeReplayCwdReceipt, requireCurrentTarget: false },
       });
@@ -529,7 +545,7 @@ async function main() {
       record('receipt verifier rejects relative replay cwd facts', false, { reason: 'atomic_positive_bytes_verify_receipt is not registered' });
     }
 
-    const commitBegin = await client.callTool({
+    const commitBegin = await callTool(client, {
       name: 'atomic_positive_bytes_begin',
       arguments: {
         file: commitRel,
@@ -540,14 +556,14 @@ async function main() {
     });
     const commitSessionId = lastJson(commitBegin).sessionId;
     for (const [index, text] of chunks.entries()) {
-      const appended = await client.callTool({
+      const appended = await callTool(client, {
         name: 'atomic_positive_bytes_append',
         arguments: { sessionId: commitSessionId, index, text, sha256: sha(text) },
       });
       const body = lastJson(appended);
       record(`commit chunk ${index} accepted`, body.ok === true && body.index === index && body.chunkSha256 === sha(text), body);
     }
-    const commit = await client.callTool({ name: 'atomic_positive_bytes_commit', arguments: { sessionId: commitSessionId } });
+    const commit = await callTool(client, { name: 'atomic_positive_bytes_commit', arguments: { sessionId: commitSessionId } });
     const commitBody = lastJson(commit);
     const outputText = texts(commit);
     const tracePath = typeof commitBody.tracePath === 'string' ? path.join(repoRoot, commitBody.tracePath) : '';
@@ -593,7 +609,7 @@ async function main() {
       { commitReceipt },
     );
     if (names.has('atomic_positive_bytes_verify_receipt')) {
-      const verifiedReceipt = await client.callTool({
+      const verifiedReceipt = await callTool(client, {
         name: 'atomic_positive_bytes_verify_receipt',
         arguments: { receipt: commitReceipt, requireCurrentTarget: true },
       });
@@ -608,7 +624,7 @@ async function main() {
         verifiedReceiptBody,
       );
       const forgedReceipt = { ...commitReceipt, contentSha256: sha('forged') };
-      const rejectedForgedReceipt = await client.callTool({
+      const rejectedForgedReceipt = await callTool(client, {
         name: 'atomic_positive_bytes_verify_receipt',
         arguments: { receipt: forgedReceipt, requireCurrentTarget: true },
       });
@@ -624,7 +640,7 @@ async function main() {
         stagedBytes: commitReceipt.stagedBytes + 1,
         materialization: { ...commitReceipt.materialization, contentSha256: sha('domain-inconsistent') },
       });
-      const rejectedInternallyInvalidReceipt = await client.callTool({
+      const rejectedInternallyInvalidReceipt = await callTool(client, {
         name: 'atomic_positive_bytes_verify_receipt',
         arguments: { receipt: internallyInvalidReceipt, requireCurrentTarget: false },
       });
@@ -638,7 +654,7 @@ async function main() {
         ...commitReceipt,
         finalTargetState: 'not-written-preview',
       });
-      const rejectedInvalidFinalStateReceipt = await client.callTool({
+      const rejectedInvalidFinalStateReceipt = await callTool(client, {
         name: 'atomic_positive_bytes_verify_receipt',
         arguments: { receipt: invalidFinalStateReceipt, requireCurrentTarget: false },
       });
@@ -653,7 +669,7 @@ async function main() {
         ...commitReceipt,
         created: false,
       });
-      const rejectedInvalidCreationFactsReceipt = await client.callTool({
+      const rejectedInvalidCreationFactsReceipt = await callTool(client, {
         name: 'atomic_positive_bytes_verify_receipt',
         arguments: { receipt: invalidCreationFactsReceipt, requireCurrentTarget: false },
       });
@@ -666,7 +682,7 @@ async function main() {
       );
       const { gateDecisionTree: _missingGateDecisionTree, ...receiptWithoutGateDecisionTree } = commitReceipt;
       const missingGateTreeReceipt = withReceiptHash(receiptWithoutGateDecisionTree);
-      const rejectedMissingGateTreeReceipt = await client.callTool({
+      const rejectedMissingGateTreeReceipt = await callTool(client, {
         name: 'atomic_positive_bytes_verify_receipt',
         arguments: { receipt: missingGateTreeReceipt, requireCurrentTarget: false },
       });
@@ -695,7 +711,7 @@ async function main() {
           ),
         },
       });
-      const rejectedForgedExpectedShaReceipt = await client.callTool({
+      const rejectedForgedExpectedShaReceipt = await callTool(client, {
         name: 'atomic_positive_bytes_verify_receipt',
         arguments: { receipt: forgedExpectedShaReceipt, requireCurrentTarget: false },
       });
@@ -716,7 +732,7 @@ async function main() {
           ),
         },
       });
-      const rejectedForgedTargetGateReceipt = await client.callTool({
+      const rejectedForgedTargetGateReceipt = await callTool(client, {
         name: 'atomic_positive_bytes_verify_receipt',
         arguments: { receipt: forgedTargetGateReceipt, requireCurrentTarget: false },
       });
@@ -743,12 +759,12 @@ async function main() {
     );
 
     const tamperChunk = 'export const SAFE_STAGED_POSITIVE_BYTE = 1;\n';
-    const tamperBegin = await client.callTool({
+    const tamperBegin = await callTool(client, {
       name: 'atomic_positive_bytes_begin',
       arguments: { file: tamperRel, intent: 'refuse a staged chunk whose bytes changed after append' },
     });
     const tamperSessionId = lastJson(tamperBegin).sessionId;
-    await client.callTool({
+    await callTool(client, {
       name: 'atomic_positive_bytes_append',
       arguments: { sessionId: tamperSessionId, index: 0, text: tamperChunk, sha256: sha(tamperChunk) },
     });
@@ -762,7 +778,7 @@ async function main() {
     );
     const tamperChunkPath = path.join(tamperSessionDir, '00000000.chunk');
     fs.writeFileSync(tamperChunkPath, 'export const TAMPERED_STAGED_POSITIVE_BYTE = 2;\n');
-    const tamperCommit = await client.callTool({
+    const tamperCommit = await callTool(client, {
       name: 'atomic_positive_bytes_commit',
       arguments: { sessionId: tamperSessionId },
     });
@@ -790,7 +806,7 @@ async function main() {
     );
     const tamperRejectionReceipt = tamperBody.rejectionReceipt ?? {};
     if (names.has('atomic_positive_bytes_verify_receipt')) {
-      const verifiedTamperRejection = await client.callTool({
+      const verifiedTamperRejection = await callTool(client, {
         name: 'atomic_positive_bytes_verify_receipt',
         arguments: { receipt: tamperRejectionReceipt, requireCurrentTarget: false },
       });
@@ -817,7 +833,7 @@ async function main() {
             },
           })
         : {};
-      const rejectedForgedRejectionReceipt = await client.callTool({
+      const rejectedForgedRejectionReceipt = await callTool(client, {
         name: 'atomic_positive_bytes_verify_receipt',
         arguments: { receipt: forgedRejectionGateReceipt, requireCurrentTarget: false },
       });
@@ -834,7 +850,7 @@ async function main() {
 
     const invalidChunks = [chunks[0], 'export function BROKEN_POSITIVE_BYTE( {\n'];
     const invalidContent = invalidChunks.join('');
-    const invalidBegin = await client.callTool({
+    const invalidBegin = await callTool(client, {
       name: 'atomic_positive_bytes_begin',
       arguments: {
         file: invalidRel,
@@ -844,7 +860,7 @@ async function main() {
     });
     const invalidSessionId = lastJson(invalidBegin).sessionId;
     for (const [index, text] of invalidChunks.entries()) {
-      await client.callTool({
+      await callTool(client, {
         name: 'atomic_positive_bytes_append',
         arguments: { sessionId: invalidSessionId, index, text, sha256: sha(text) },
       });
@@ -857,7 +873,7 @@ async function main() {
       '.positive-byte-sessions',
       invalidSessionId,
     );
-    const invalidCommit = await client.callTool({
+    const invalidCommit = await callTool(client, {
       name: 'atomic_positive_bytes_commit',
       arguments: { sessionId: invalidSessionId },
     });
@@ -910,7 +926,7 @@ async function main() {
       ].join('\n'),
     );
     fs.chmodSync(fakeEslintPath, 0o755);
-    const lintBegin = await client.callTool({
+    const lintBegin = await callTool(client, {
       name: 'atomic_positive_bytes_begin',
       arguments: {
         file: lintRel,
@@ -920,11 +936,11 @@ async function main() {
     });
     const lintSessionId = lastJson(lintBegin).sessionId;
     const lintText = 'export const LINT_FAILURE = 1;\n';
-    await client.callTool({
+    await callTool(client, {
       name: 'atomic_positive_bytes_append',
       arguments: { sessionId: lintSessionId, index: 0, text: lintText, sha256: sha(lintText) },
     });
-    const lintCommit = await client.callTool({
+    const lintCommit = await callTool(client, {
       name: 'atomic_positive_bytes_commit',
       arguments: { sessionId: lintSessionId },
     });
@@ -950,7 +966,7 @@ async function main() {
       lintBody,
     );
     if (lintReceipt && names.has('atomic_positive_bytes_verify_receipt')) {
-      const verifiedLintReceipt = await client.callTool({
+      const verifiedLintReceipt = await callTool(client, {
         name: 'atomic_positive_bytes_verify_receipt',
         arguments: { receipt: lintReceipt, requireCurrentTarget: false },
       });
@@ -977,16 +993,16 @@ async function main() {
       });
     }
 
-    const abortBegin = await client.callTool({
+    const abortBegin = await callTool(client, {
       name: 'atomic_positive_bytes_begin',
       arguments: { file: path.join(baseRel, 'abort.ts'), intent: 'abort staged generated bytes', expectedContentSha256: sha('x\n') },
     });
     const abortSessionId = lastJson(abortBegin).sessionId;
-    await client.callTool({
+    await callTool(client, {
       name: 'atomic_positive_bytes_append',
       arguments: { sessionId: abortSessionId, index: 0, text: 'x\n', sha256: sha('x\n') },
     });
-    const abort = await client.callTool({ name: 'atomic_positive_bytes_abort', arguments: { sessionId: abortSessionId } });
+    const abort = await callTool(client, { name: 'atomic_positive_bytes_abort', arguments: { sessionId: abortSessionId } });
     const abortBody = lastJson(abort);
     record('abort drops staged chunks without disk effect', abortBody.ok === true && abortBody.changed === false && !fs.existsSync(path.join(repoRoot, baseRel, 'abort.ts')), abortBody);
   } finally {
@@ -995,7 +1011,7 @@ async function main() {
     } catch {
       // ignore close errors in proof cleanup
     }
-    fs.rmSync(path.join(repoRoot, baseRel), { recursive: true, force: true });
+    fs.rmSync(proofProjectAbs, { recursive: true, force: true });
   }
 }
 

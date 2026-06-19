@@ -63,18 +63,21 @@ const GATE_VERSION = '1.0.0';
 
 // ── LSP Mesh communication ──────────────────────────────────────────
 
+export interface LspDiagnostic {
+  range: { start: { line: number; character: number }; end: { line: number; character: number } };
+  severity: number;
+  message: string;
+  source?: string;
+  code?: number;
+}
+
 export interface LspMeshResult {
   ok: boolean;
   language: string;
   /** which workspace the mesh resolved the file into ('auto' when inferred). */
   workspace?: string;
-  diagnostics?: Array<{
-    range: { start: { line: number; character: number }; end: { line: number; character: number } };
-    severity: number;
-    message: string;
-    source?: string;
-    code?: number;
-  }>;
+  diagnostics?: LspDiagnostic[];
+  data?: { diagnostics?: LspDiagnostic[] };
   error?: string;
 }
 
@@ -116,8 +119,9 @@ export async function queryLspMesh(
         return;
       }
       try {
-        const result = JSON.parse(stdout) as LspMeshResult;
-        resolve(result);
+        const raw = JSON.parse(stdout) as LspMeshResult;
+        const diagnostics = raw.diagnostics ?? raw.data?.diagnostics ?? [];
+        resolve({ ...raw, diagnostics });
       } catch {
         resolve({
           ok: false,

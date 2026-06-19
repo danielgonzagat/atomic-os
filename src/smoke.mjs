@@ -112,9 +112,10 @@ const impRb = await rpc(16, 'tools/call', { name: 'atomic_add_import', arguments
 check('atomic_add_import on Ruby (require) applies', !!impRb && fs.readFileSync(path.join(work, 'b.rb'), 'utf8').includes("require 'json'"));
 const impGo = await rpc(17, 'tools/call', { name: 'atomic_add_import', arguments: { file: 'b.go', module: 'strings', name: '' } });
 check('atomic_add_import on Go (import) applies', !!impGo && fs.readFileSync(path.join(work, 'b.go'), 'utf8').includes('import "strings"'));
-// LSP awareness: a non-TS cross-file rename surfaces the exact missing language server + install command
-const lspGo = await rpc(18, 'tools/call', { name: 'atomic_rename_symbol_cross_file', arguments: { file: 'b.go', line: 3, column: 6, newName: 'Renamed' } });
-check('atomic surfaces the missing LSP (gopls) + install command for non-TS cross-file rename', /gopls/.test(txt(lspGo)) && /install|INSTALL/.test(txt(lspGo)));
+// Non-TS cross-file rename via vendored tree-sitter (zero LSP, zero spawn) — atomic IS the parser
+const lspGo = await rpc(18, 'tools/call', { name: 'atomic_rename_symbol_cross_file', arguments: { file: 'b.go', line: 5, column: 6, newName: 'Renamed' } });
+const goAfterRename = fs.readFileSync(path.join(work, 'b.go'), 'utf8');
+check('atomic cross-file rename on Go via tree-sitter (zero LSP, zero spawn)', goAfterRename.includes('Renamed') && !goAfterRename.includes('func Greet'));
 // universal decorator + await across non-TS grammars
 fs.writeFileSync(path.join(work, 'd.py'), 'import os\ndef greet(n):\n    return n\n');
 const decPy = await rpc(19, 'tools/call', { name: 'atomic_add_decorator', arguments: { file: 'd.py', targetLine: 2, decorator: '@staticmethod' } });

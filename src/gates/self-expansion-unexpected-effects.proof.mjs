@@ -40,6 +40,8 @@ record(
   source.includes("rel.startsWith('.proof-')") &&
     source.includes("rel.startsWith('.smoke-')") &&
     source.includes("rel.startsWith('.self-expansion-')") &&
+    source.includes("rel.startsWith('.self-evolution-harness-input.')") &&
+    source.includes("rel.startsWith('.self-evolution-harness-output.')") &&
     source.includes("rel.startsWith('.atomic-exec-sandbox-')") &&
     source.includes("rel.startsWith('.external-runtime-denial-')") &&
     source.includes("rel.startsWith('atomic-exec-broker-file-')") &&
@@ -49,10 +51,17 @@ record(
     source.includes('function isSelfEvolutionArchiveEffect') &&
     source.includes("return file === SELF_EVOLUTION_ARCHIVE_REL") &&
     source.includes('!isSelfEvolutionArchiveEffect(rel)') &&
+    source.includes('const SELF_EXPANSION_SNAPSHOT_MAX_FILE_BYTES') &&
+    source.includes('function captureSelfExpansionSnapshot') &&
+    source.includes('maxFileBytes: SELF_EXPANSION_SNAPSHOT_MAX_FILE_BYTES') &&
+    source.includes('const LAUNCHER_DURABILITY_EFFECTS = new Set') &&
     source.includes('function isLauncherDurabilityMetadataEffect') &&
     source.includes("file.startsWith('dist-lkg/')") &&
     source.includes("file.startsWith('dist.broken-last/')") &&
-    source.includes("file === 'launcher-blessed/.blessed-manifest.json'") &&
+    source.includes("'launcher-blessed/.blessed-manifest.json'") &&
+    source.includes("'launcher-blessed/build.mjs'") &&
+    source.includes("'launcher-blessed/dist-freshness.mjs'") &&
+    source.includes('LAUNCHER_DURABILITY_EFFECTS.has(file)') &&
     source.includes('!isLauncherDurabilityMetadataEffect(rel)'),
 );
 record(

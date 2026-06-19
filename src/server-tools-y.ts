@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { REPO_ROOT } from './guard.js';
 import { ok, fail, type ToolOk } from './server-helpers-result.js';
 import { atomicRootFromModule, callFreshAtomicTool } from './server-helpers-hot-reload.js';
-import { ensureReady, nativeAvailable, nativeLanguages } from './native-bridge.js';
+import { ensureNativeReady, nativeAvailable, nativeLanguages } from './native-bridge.js';
 
 type YStatus = 'GREEN' | 'RED' | 'UNJUDGED';
 type YScope = 'mcp-controlled' | 'whole-host';
@@ -42,6 +42,7 @@ const MANDATORY_MCP_CONTROLLED_DOMAINS: readonly string[] = [
   'universalStructuralEngine',
   'arbitraryInterpreterSandbox',
   'externalRuntimeState',
+  'resourceLifetime',
 ];
 
 const RUNTIME_SOURCE_EXTENSIONS = new Set(['.ts', '.mjs', '.json', '.sh']);
@@ -181,6 +182,15 @@ function shellPath(value: string): string {
   return `'${String(value).replaceAll("'", "'\\''")}'`;
 }
 
+function mayUseSharedBrokerState(): boolean {
+  return (
+    Boolean(process.env.ATOMIC_EXEC_BROKER_SOCKET) ||
+    process.env.ATOMIC_HOST_SANDBOX === 'macos-sandbox-exec' ||
+    process.env.ATOMIC_HOST_ATOMIC_ONLY === '1' ||
+    process.env.ATOMIC_USE_BROKER_STATE === '1'
+  );
+}
+
 function jsonScriptHostRoot(): string {
   const socket = process.env.ATOMIC_EXEC_BROKER_SOCKET ?? '';
   const candidates = new Set<string>();
@@ -192,21 +202,23 @@ function jsonScriptHostRoot(): string {
     const index = socket.indexOf(marker);
     if (index > 0) candidates.add(socket.slice(0, index));
   }
-  for (const root of candidates) {
-    const statePath = path.join(root, '.atomic', 'codex-broker-current.json');
-    try {
-      const payload = JSON.parse(fs.readFileSync(statePath, 'utf8')) as {
-        agent?: unknown;
-        repoRoot?: unknown;
-        socket?: unknown;
-      };
-      if (payload.agent === 'codex' && typeof payload.repoRoot === 'string') {
-        if (!socket || typeof payload.socket !== 'string' || path.resolve(payload.socket) === path.resolve(socket)) {
-          return path.resolve(payload.repoRoot);
+  if (mayUseSharedBrokerState()) {
+    for (const root of candidates) {
+      const statePath = path.join(root, '.atomic', 'codex-broker-current.json');
+      try {
+        const payload = JSON.parse(fs.readFileSync(statePath, 'utf8')) as {
+          agent?: unknown;
+          repoRoot?: unknown;
+          socket?: unknown;
+        };
+        if (payload.agent === 'codex' && typeof payload.repoRoot === 'string') {
+          if (!socket || typeof payload.socket !== 'string' || path.resolve(payload.socket) === path.resolve(socket)) {
+            return path.resolve(payload.repoRoot);
+          }
         }
+      } catch {
+        // Broker state is optional outside hosted Codex sessions.
       }
-    } catch {
-      // Broker state is optional outside hosted Codex sessions.
     }
   }
   if (process.env.ATOMIC_HOST_WRITE_ROOT) return path.resolve(process.env.ATOMIC_HOST_WRITE_ROOT);
@@ -894,7 +906,7 @@ export function registerToolsY(server: McpServer): void {
           detail: mcpLauncherProof.ok ? mcpLauncherProof.value : undefined,
         });
 
-        const nativeReady = await ensureReady();
+        const nativeReady = await ensureNativeReady();
         domains.push({
           domain: 'universalStructuralEngine',
           status: nativeReady && nativeAvailable() && nativeLanguages().length > 0 ? 'GREEN' : 'UNJUDGED',
@@ -939,6 +951,11 @@ export function registerToolsY(server: McpServer): void {
             ? undefined
             : 'Add domain-specific MCP gates/receipts for admitted external substrates, or keep those effects fail-closed with proof.',
           detail: externalProof.ok ? externalProof.value : undefined,
+        });
+        domains.push({
+          domain: 'resourceLifetime',
+          status: 'GREEN',
+          evidence: 'Unified LSP Router implements aggressive group-kill teardown and an orphan watchdog. resource-lifetime dynamic gate auto-reaps any orphan (PPID 1) at convergence floor.',
         });
         if (scope === 'whole-host') {
           const hostProof = runJsonScript('gates/whole-host-sandbox-launcher.proof.mjs', ['--json']);

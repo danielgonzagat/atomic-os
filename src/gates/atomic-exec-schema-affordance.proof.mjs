@@ -59,10 +59,14 @@ async function dynamicToolSchemaProof() {
     return {
       ok:
         Boolean(tool) &&
+        description.includes('omit proveEffect for normal validation') &&
+        description.includes('mutable-or-unknown commands auto-prove byte effects') &&
         description.includes('explicit proveEffect:false is refused') &&
-        proveDescription.includes('MODEL USAGE: omit this field for normal npm test/typecheck/build') &&
-        proveDescription.includes('Never pass false during normal work'),
+        proveDescription === '',
+      descriptionIncludesOmit: description.includes('omit proveEffect for normal validation'),
+      descriptionIncludesAutoProof: description.includes('mutable-or-unknown commands auto-prove byte effects'),
       descriptionIncludesRefusal: description.includes('explicit proveEffect:false is refused'),
+      nestedSchemaDescriptionsStripped: proveDescription === '',
       proveDescription,
     };
   } finally {

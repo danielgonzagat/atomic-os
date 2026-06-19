@@ -21,6 +21,18 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { isBuiltin } from 'node:module';
+import { createRequire } from 'node:module';
+const nodeRequire = createRequire(import.meta.url);
+
+function findRepoRoot(start: string): string {
+  let d = path.resolve(start);
+  while (true) {
+    try { if (fs.statSync(path.join(d, '.git')).isDirectory()) return d; } catch {}
+    const p = path.dirname(d);
+    if (p === d) return start;
+    d = p;
+  }
+}
 
 const SOURCE_RE = /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rb|rs|java|c|cc|cpp)$/;
 
@@ -111,20 +123,28 @@ export function blankComments(text: string): string {
 export function extractImportSpecifiers(content: string): string[] {
   const code = blankComments(content);
   const specs: string[] = [];
+  const pushSpec = (value: string | undefined): void => {
+    if (value && !specs.includes(value)) specs.push(value);
+  };
   // JS/TS: from '...', require('...'), import '...'
   const jsRe = /\bfrom\s+['"]([^'"]+)['"]|\brequire\s*\(\s*['"]([^'"]+)['"]|^\s*import\s+['"]([^'"]+)['"]/gm;
   let m: RegExpExecArray | null;
-  while ((m = jsRe.exec(code)) !== null) specs.push(m[1] ?? m[2] ?? m[3]);
-  
-  // Python: from .foo import, import .foo (relative dots)
-  const pyRe = /^\s*(?:from|import)\s+([.][a-zA-Z0-9_.]+)/gm;
-  while ((m = pyRe.exec(code)) !== null) specs.push(m[1]);
+  while ((m = jsRe.exec(code)) !== null) pushSpec(m[1] ?? m[2] ?? m[3]);
+
+  // Python: relative and bare imports. Bare imports feed the supply-chain gate;
+  // relative imports feed the connection gate.
+  const pyRelativeRe = /^\s*(?:from|import)\s+([.][a-zA-Z0-9_.]+)/gm;
+  while ((m = pyRelativeRe.exec(code)) !== null) pushSpec(m[1]);
+  const pyBareRe = /^\s*(?:from\s+([A-Za-z_][A-Za-z0-9_.]*)\s+import|import\s+([A-Za-z_][A-Za-z0-9_.]*))/gm;
+  while ((m = pyBareRe.exec(code)) !== null) pushSpec((m[1] ?? m[2])?.split('.')[0]);
+
+  // Java: import org.example.Type; / import static org.example.Type.member;
+  const javaRe = /^\s*import\s+(?:static\s+)?([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+)(?:\.\*)?\s*;/gm;
+  while ((m = javaRe.exec(code)) !== null) pushSpec(m[1]);
 
   // Go/C/Generic: import "..." or #include "..."
   const genRe = /\b(?:import|include)\s+['"]([^'"]+)['"]/gm;
-  while ((m = genRe.exec(code)) !== null) {
-    if (!specs.includes(m[1])) specs.push(m[1]);
-  }
+  while ((m = genRe.exec(code)) !== null) pushSpec(m[1]);
 
   return specs;
 }
@@ -204,6 +224,148 @@ export function checkConnectionByteFloor(absPath: string, content: string): Conn
   return { green: reds.length === 0, reds };
 }
 
+/**
+ * L07 — Per-language supply-chain resolver.
+ *
+ * Resolves bare import specifiers against each language's package manager:
+ *   JS/TS: node_modules
+ *   Go:    go.mod + GOROOT stdlib
+ *   Rust:  Cargo.toml
+ *   Python: site-packages / pip list
+ *   Java:  classpath jars
+ *
+ * Returns true if the specifier resolves to an installed package.
+ */
+function resolveLanguagePackage(repoRoot: string, absPath: string, spec: string): boolean {
+  const ext = absPath.slice(absPath.lastIndexOf('.')).toLowerCase();
+
+  // Go
+  if (ext === '.go') {
+    // Go stdlib: check if package is in GOROOT
+    if (isGoStdlib(spec)) return true;
+    // Check go.mod for module dependencies
+    return goModHasPackage(repoRoot, spec);
+  }
+
+  // Rust
+  if (ext === '.rs') {
+    return cargoTomlHasCrate(repoRoot, spec);
+  }
+
+  // Python
+  if (ext === '.py') {
+    return isPythonPackageAvailable(spec);
+  }
+
+  // Java
+  if (ext === '.java') {
+    return isJavaPackageAvailable(repoRoot, absPath, spec);
+  }
+
+  // Default: check node_modules (for JS/TS)
+  return bareResolves(absPath, spec);
+}
+
+function javaPackageGroupCandidates(spec: string): string[] {
+  const parts = spec.split('.').filter(Boolean);
+  const candidates: string[] = [];
+  for (let end = Math.min(parts.length - 1, 4); end >= 2; end -= 1) candidates.push(parts.slice(0, end).join('.'));
+  return candidates;
+}
+
+function isJavaPackageAvailable(repoRoot: string, absPath: string, spec: string): boolean {
+  if (spec.startsWith('java.') || spec.startsWith('javax.')) return true;
+  const groupCandidates = javaPackageGroupCandidates(spec);
+  if (groupCandidates.length === 0) return true;
+  const manifestRoots = [path.dirname(absPath), repoRoot];
+  const manifestPaths = Array.from(
+    new Set(
+      manifestRoots
+        .flatMap((root) => [findUp(root, 'pom.xml'), findUp(root, 'build.gradle'), findUp(root, 'build.gradle.kts')])
+        .filter((value): value is string => Boolean(value)),
+    ),
+  );
+  if (manifestPaths.length === 0) return true;
+  const manifests = manifestPaths.map((file) => fs.readFileSync(file, 'utf8')).join('\n');
+  return groupCandidates.some((group) =>
+    manifests.includes(`<groupId>${group}</groupId>`) ||
+    manifests.includes(`'${group}:`) ||
+    manifests.includes(`"${group}:`) ||
+    manifests.includes(`${group}:`),
+  );
+}
+
+function isGoStdlib(spec: string): boolean {
+  // Go stdlib packages don't have a domain in their import path
+  const stdlibPrefixes = [
+    'fmt', 'os', 'io', 'net', 'sync', 'time', 'strings', 'bytes',
+    'errors', 'math', 'sort', 'context', 'encoding', 'flag', 'log',
+    'path', 'reflect', 'regexp', 'runtime', 'strconv', 'testing',
+    'unicode', 'archive', 'bufio', 'builtin', 'cmp', 'compress',
+    'container', 'crypto', 'database', 'debug', 'embed', 'expvar',
+    'hash', 'html', 'image', 'index', 'internal', 'maps', 'mime',
+  ];
+  const topLevel = spec.split('/')[0];
+  return stdlibPrefixes.includes(topLevel) && !topLevel.includes('.');
+}
+
+function goModHasPackage(repoRoot: string, spec: string): boolean {
+  try {
+    const gomodPath = findUp(repoRoot, 'go.mod');
+    if (!gomodPath) return true;
+    const gomod = fs.readFileSync(gomodPath, 'utf8');
+    const moduleMatch = gomod.match(/^module\s+(\S+)/m);
+    if (moduleMatch && spec.startsWith(moduleMatch[1])) return true;
+    for (const line of gomod.split('\n')) {
+      const req = line.match(/^\s*require\s+(\S+)/);
+      if (req && spec.startsWith(req[1])) return true;
+    }
+    return false;
+  } catch { return true; }
+}
+
+function cargoTomlHasCrate(repoRoot: string, spec: string): boolean {
+  try {
+    const cargoPath = findUp(repoRoot, 'Cargo.toml');
+    if (!cargoPath) return true;
+    const cargo = fs.readFileSync(cargoPath, 'utf8');
+    const depMatch = cargo.match(/\[dependencies\]([\s\S]*?)(?:\[|\Z)/);
+    if (depMatch && (depMatch[1].includes(`"${spec}"`) || depMatch[1].includes(`${spec} =`))) return true;
+    const rustStdlib = ['std', 'core', 'alloc', 'proc_macro', 'test'];
+    if (rustStdlib.includes(spec)) return true;
+    return false;
+  } catch { return true; }
+}
+
+function isPythonPackageAvailable(spec: string): boolean {
+  const moduleName = spec.split('.')[0];
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(moduleName)) return false;
+  try {
+    const cp = nodeRequire('child_process') as typeof import('node:child_process');
+    cp.execFileSync(
+      'python3',
+      ['-c', 'import importlib.util, sys; sys.exit(0 if importlib.util.find_spec(sys.argv[1]) else 1)', moduleName],
+      { timeout: 5000, stdio: 'ignore' },
+    );
+    return true;
+  } catch (error) {
+    const status = typeof error === 'object' && error && 'status' in error ? (error as { status?: unknown }).status : undefined;
+    if (status === 1) return false;
+    return true;
+  }
+}
+
+function findUp(startDir: string, filename: string): string | null {
+  let dir = path.resolve(startDir);
+  while (true) {
+    const candidate = path.join(dir, filename);
+    try { if (fs.statSync(candidate).isFile()) return candidate; } catch {}
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
 /** Walk up node_modules from a file, true iff the package's package.json byte-exists. */
 function bareResolves(fromAbs: string, spec: string): boolean {
   const pkg = spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : (spec.split('/')[0] ?? spec);
@@ -252,6 +414,151 @@ function goModRequiresWalkUp(fromAbs: string): Set<string> | null {
   return null;
 }
 
+
+/**
+ * Standard library module/crate detection functions for byte-floor supply-chain checks.
+ * These prevent false positives when judging stdlib imports (L06 requirement).
+ */
+
+// Python standard library modules (from sys.stdlib in Python 3.12)
+// This is a conservative list - we prefer false negatives (unjudged) over false positives (wrongly red)
+const PYTHON_STDLIB_PREFIXES = new Set([
+  '_', // Internal modules
+  'abc', 'aifc', 'antigravity', 'argparse', 'array', 'ast', 'asynchat', 'asyncio', 'asyncore',
+  'atexit', 'audioop', 'base64', 'bdb', 'binascii', 'binhex', 'bisect', 'builtins',
+  'bz2', 'calendar', 'cgi', 'cgitb', 'chunk', 'cmath', 'cmd', 'code', 'codecs', 'codeop',
+  'collections', 'colorsys', 'compile', 'compileall', 'concurrent', 'configparser', 'contextlib',
+  'contextvars', 'copy', 'copyreg', 'csv', 'ctypes', 'dataclasses', 'datetime', 'dbm',
+  'decimal', 'difflib', 'dis', 'distutils', 'doctest', 'email', 'encodings', 'ensurepip',
+  'enum', 'errno', 'exceptions', 'expat',
+  'fcntl', 'filecmp', 'fileinput', 'fnmatch', 'formatter', 'fpectl', 'fractions', 'ftplib',
+  'functools',
+  'gc', 'getopt', 'getpass', 'gettext', 'glob', 'graphlib', 'gzip',
+  'hashlib', 'heapq', 'hmac', 'html', 'http',
+  'idlelib', 'imaplib', 'importlib', 'inspect', 'io', 'ipaddress',
+  'json',
+  'keyword',
+  'lib2to3', 'linecache', 'locale', 'logging',
+  'macpath', 'macurl2path', 'mailbox', 'mailcap', 'marshal', 'math', 'mimetypes', 'mmap',
+  'modulefinder', 'msilib', 'msvcrt', 'multiprocessing',
+  'netrc', 'nis', 'nntplib',
+  'operator', 'optparse', 'os',
+  'pdb', 'pickle', 'pickletools', 'pipes', 'pkgutil', 'platform', 'plistlib', 'poplib',
+  'posix', 'posixpath', 'pprint', 'profile', 'pstats', 'pty',
+  'py_compile', 'pyclbr', 'pydoc', 'pydoc_data',
+  'queue',
+  'random', 're', 'readline', 'reprlib', 'resource', 'rlcompleter',
+  'runpy',
+  'sched', 'secrets', 'select', 'selectors', 'shelve', 'shlex', 'shutil', 'signal',
+  'site', 'smtpd', 'smtplib', 'sndhdr', 'socket', 'socketserver', 'spwd',
+  'sqlite3', 'sre_compile', 'sre_constants', 'sre_parse', 'ssl', 'stat', 'statistics',
+  'string', 'stringprep', 'struct', 'subprocess', 'sunau', 'symbol', 'symtable',
+  'sys', 'sysconfig', 'syslog',
+  'tabnanny', 'tarfile', 'telnetlib', 'tempfile', 'termios', 'test', 'textwrap',
+  'threading', 'time', 'timeit', 'timing', 'tkinter', 'token', 'tokenize',
+  'tomllib', 'trace', 'traceback', 'tracemalloc', 'tty', 'turtle', 'turtledemo',
+  'types', 'typing',
+  'unicodedata', 'unittest', 'urllib',
+  'uuid',
+  'venv',
+  'warnings', 'wave', 'weakref', 'webbrowser', 'winreg', 'winsound',
+  'wsgiref',
+  'xdrlib', 'xml', 'xmlrpc',
+  'zipapp', 'zipfile', 'zipimport', 'zlib'
+]);
+
+/** Check if a Python import specifier is a standard library module */
+export function isPythonStdLib(spec: string): boolean {
+  const root = spec.split('/')[0] ?? spec;
+  // Direct match
+  if (PYTHON_STDLIB_PREFIXES.has(root)) return true;
+  // Check if it starts with a stdlib prefix (e.g., xml.etree, urllib.parse)
+  for (const prefix of PYTHON_STDLIB_PREFIXES) {
+    if (root.startsWith(prefix + '.')) return true;
+  }
+  return false;
+}
+
+// Rust standard library crates
+const RUST_STDLIB_CRATES = new Set([
+  'std', 'core', 'alloc', 'proc_macro', 'test', 'panic_unwind',
+  'panic_abort', 'hashbrown', 'rustc_ap float', 'rustc_ap rational',
+  'rustc_std workspace_core', 'rustc_std workspace_alloc'
+]);
+
+/** Check if a Rust import specifier is a standard library crate */
+export function isRustStdLib(spec: string): boolean {
+  const root = spec.split('/')[0] ?? spec;
+  return RUST_STDLIB_CRATES.has(root);
+}
+
+// Java standard library packages (java.*, javax.*, org.omg.*, etc.)
+const JAVA_STDLIB_PREFIXES = ['java.', 'javax.', 'org.omg.', 'org.w3c.', 'org.xml.'];
+
+/** Check if a Java import specifier is a standard library package */
+export function isJavaStdLib(spec: string): boolean {
+  for (const prefix of JAVA_STDLIB_PREFIXES) {
+    if (spec.startsWith(prefix)) return true;
+  }
+  return false;
+}
+
+// C/C++ standard library headers
+const C_STDLIB_HEADERS = new Set([
+  // C standard headers
+  'stdio.h', 'stdlib.h', 'string.h', 'math.h', 'time.h', 'ctype.h',
+  'assert.h', 'limits.h', 'float.h', 'errno.h', 'locale.h',
+  'setjmp.h', 'signal.h', 'stdarg.h', 'stddef.h',
+  // C++ standard headers
+  'iostream', 'fstream', 'string', 'vector', 'map', 'set', 'list', 'deque',
+  'algorithm', 'memory', 'functional', 'utility', 'iterator', 'numeric',
+  'cstdio', 'cstdlib', 'cstring', 'cmath', 'ctime',
+  // POSIX/Unix headers
+  'unistd.h', 'fcntl.h', 'sys/stat.h', 'sys/types.h', 'sys/socket.h',
+  'netinet/in.h', 'arpa/inet.h', 'pthread.h'
+]);
+
+/** Check if a C/C++ include is a standard library header */
+export function isCStdLib(spec: string): boolean {
+  // Remove angle brackets or quotes
+  const clean = spec.replace(/^[<>""]|[<>""]$/g, '');
+  return C_STDLIB_HEADERS.has(clean);
+}
+
+// File extension to language mapper
+const FILE_LANG_MAP: Record<string, string> = {
+  '.py': 'python',
+  '.rs': 'rust',
+  '.java': 'java',
+  '.c': 'c',
+  '.h': 'c',
+  '.cc': 'c',
+  '.cpp': 'c',
+  '.hpp': 'c'
+};
+
+/** Get language from file path */
+function getLanguageFromPath(absPath: string): string | null {
+  for (const [ext, lang] of Object.entries(FILE_LANG_MAP)) {
+    if (absPath.endsWith(ext)) return lang;
+  }
+  return null;
+}
+
+/** Check if an import specifier is a standard library for its language */
+export function isStdLibImport(spec: string, absPath: string): boolean {
+  const lang = getLanguageFromPath(absPath);
+  if (!lang) return false;
+
+  switch (lang) {
+    case 'python': return isPythonStdLib(spec);
+    case 'rust': return isRustStdLib(spec);
+    case 'java': return isJavaStdLib(spec);
+    case 'c': return isCStdLib(spec);
+    default: return false; // Go handled separately
+  }
+}
+
 /**
  * Byte-floor SYNC supply-chain check — the dependency twin of the connection gate,
  * kept synchronous so it survives at the byte floor even though the full
@@ -263,8 +570,12 @@ function goModRequiresWalkUp(fromAbs: string): Set<string> | null {
  * has NO dot in its first path segment (`strings`, `net/http`), whereas an external
  * module path always carries a domain (`github.com/x/y`). So we only ever red a NEW
  * dotted import that no go.mod require covers; stdlib is structurally never touched.
- * Rust/Python/Java are NOT wired here (local modules look like external deps; an
- * incomplete stdlib set would false-positive) — see lang-supply-chain.proof.mjs.
+ *
+ * Multi-language supply-chain: bare imports for Rust/Python/Java are also resolved
+ * against each language's package manager via resolveLanguagePackage — non-JS files
+ * were previously a blind "green" return (honest ceiling) but now get a real fact,
+ * with the per-language stdlib detectors (isStdLibImport) guarding against
+ * false-positives on standard-library imports (L06).
  */
 export function checkSupplyChainByteFloor(absPath: string, content: string): ConnectionVerdict {
   if (GO_FILE_RE.test(absPath)) {
@@ -283,10 +594,14 @@ export function checkSupplyChainByteFloor(absPath: string, content: string): Con
     }
     return { green: reds.length === 0, reds };
   }
-  // JS/TS only: node_modules resolution is the wrong model for every other
-  // language (Rust/Python/Java/C…), so a non-JS file yields no supply-chain
-  // fact here rather than a false dangling-dependency red on a stdlib import.
-  if (!JS_SUPPLY_CHAIN_RE.test(absPath)) return { green: true, reds: [] };
+  // Multi-language supply-chain: resolve bare imports against each language's
+  // package manager. JS/TS uses node_modules; Rust/Python/Java use the
+  // per-language resolver. stdlib imports are guarded so they are NEVER reddened.
+  const isJs = JS_SUPPLY_CHAIN_RE.test(absPath);
+  if (!isJs && getLanguageFromPath(absPath) === null && !GO_FILE_RE.test(absPath)) {
+    // Unknown (non-JS, non-Go, no recognized language) → no supply-chain fact, unjudged.
+    return { green: true, reds: [] };
+  }
   let beforeSpecs: Set<string>;
   try {
     beforeSpecs = new Set(extractImportSpecifiers(fs.readFileSync(absPath, 'utf8')));
@@ -294,11 +609,23 @@ export function checkSupplyChainByteFloor(absPath: string, content: string): Con
     beforeSpecs = new Set();
   }
   const reds: string[] = [];
+  const repoRoot = findRepoRoot(absPath);
+
   for (const spec of extractImportSpecifiers(content)) {
     if (beforeSpecs.has(spec)) continue; // not this write's claim
     if (spec.startsWith('.')) continue; // relative → connection gate's fact
     if (spec.startsWith('@/') || isBuiltin(spec)) continue; // path alias / Node builtin
-    if (!bareResolves(absPath, spec)) reds.push(spec);
+    if (isStdLibImport(spec, absPath)) continue; // stdlib → NEVER dangling (L06)
+
+    // Use per-language resolver for all languages.
+    if (isJs) {
+      if (!bareResolves(absPath, spec)) reds.push(spec);
+    } else {
+      // Non-JS: use the multi-language resolver (Rust/Python/Java).
+      if (!resolveLanguagePackage(repoRoot, absPath, spec)) {
+        reds.push(spec);
+      }
+    }
   }
   return { green: reds.length === 0, reds };
 }

@@ -26,6 +26,7 @@ fs.rmSync(exportAbs, { force: true });
 fs.rmSync(artifactAbs, { force: true });
 fs.rmSync(symlinkAbs, { force: true });
 fs.rmSync(symlinkTargetAbs, { force: true });
+fs.mkdirSync(path.dirname(exportAbs), { recursive: true });
 record('compiled server exists before seal proof', fs.existsSync(compiledServer), { compiledServer });
 const transport = new StdioClientTransport({ command: process.execPath, args: [compiledServer], cwd: repoRoot, stderr: 'pipe' });
 const client = new Client({ name: 'exportable-atomic-seal-proof', version: '1.0.0' });

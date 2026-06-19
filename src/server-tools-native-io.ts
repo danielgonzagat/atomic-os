@@ -20,7 +20,7 @@ import { activeWorkspaceRoot, assertInsideActiveWorkspace, REPO_ROOT } from './g
 import { normalizeRepoRelPath, readUtf8 } from './server-helpers-io.js';
 import { ok, fail, type ToolOk } from './server-helpers-result.js';
 import {
-  ensureReady,
+  ensureNativeReady,
   nativeAvailable,
   nativeGrep,
   nativeGlob,
@@ -28,7 +28,7 @@ import {
 } from './native-bridge.js';
 
 async function nativeReadyOrFail(alt: string): Promise<ToolOk | null> {
-  const ready = await ensureReady();
+  const ready = await ensureNativeReady();
   if (!ready || !nativeAvailable()) {
     return fail(
       `universal engine (web-tree-sitter) unavailable — ${alt}`,

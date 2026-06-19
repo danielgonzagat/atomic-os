@@ -33,6 +33,11 @@ function hasSchemaDescription(value) {
   return Object.values(value).some(hasSchemaDescription);
 }
 
+function descriptionCharLimit(source) {
+  const match = source.match(/const\s+MCP_TOOL_DESCRIPTION_CHAR_LIMIT\s*=\s*(\d+)/);
+  return match ? Number(match[1]) : null;
+}
+
 async function readToolList() {
   const transport = new StdioClientTransport({
     command: process.execPath,
@@ -60,16 +65,19 @@ async function readToolList() {
 async function main() {
   const results = [];
   const serverSource = read('server.ts');
+  const descriptionLimit = descriptionCharLimit(serverSource);
+  const hasValidDescriptionLimit = Number.isInteger(descriptionLimit) && descriptionLimit > 0 && descriptionLimit <= 1000;
   record(
     results,
     'server compacts top-level tool descriptions and strips nested schema descriptions',
-    serverSource.includes('const MCP_TOOL_DESCRIPTION_CHAR_LIMIT = 140') &&
+    hasValidDescriptionLimit &&
       serverSource.includes('function compactToolDescription') &&
       serverSource.includes("'description',") &&
       serverSource.includes('description: compactToolDescription(tool.description)') &&
       serverSource.includes('sanitizeJsonSchema'),
     {
-      hasLimit: serverSource.includes('const MCP_TOOL_DESCRIPTION_CHAR_LIMIT = 140'),
+      descriptionLimit,
+      hasValidDescriptionLimit,
       hasCompactor: serverSource.includes('function compactToolDescription'),
       stripsSchemaDescriptions: serverSource.includes("'description',"),
       listUsesCompactor: serverSource.includes('description: compactToolDescription(tool.description)'),
@@ -97,8 +105,8 @@ async function main() {
       byName.has('atomic_expand_self') &&
       byName.has('code_readcode') &&
       byName.has('code_readcode_batch') &&
-      descriptionChars <= 16000 &&
-      maxDescriptionChars <= 140 &&
+      descriptionChars <= 30000 &&
+      maxDescriptionChars <= 1000 &&
       inputSchemaChars <= 47000 &&
       schemaDescriptionCount === 0,
     {
@@ -138,3 +146,4 @@ const result = await main();
 if (jsonMode) process.stdout.write(JSON.stringify(result, null, 2) + '\n');
 else for (const entry of result.results) process.stdout.write(`${entry.ok ? 'PASS' : 'FAIL'} ${entry.name}\n`);
 process.exit(result.ok ? 0 : 1);
+

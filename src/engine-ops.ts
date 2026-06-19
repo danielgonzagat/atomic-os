@@ -38,7 +38,7 @@ export interface CalleeReplaceResult {
 /**
  * Replace function/method name at a call site, preserving all arguments exactly.
  * Works on any language: finds the callee identifier before the opening paren.
- * 
+ *
  * Example: sendMessage(phone, content) → sendTemplateMessage(phone, content)
  */
 export function replaceCalleeKeepArgs(
@@ -99,6 +99,33 @@ export interface ArgEditResult {
  * Returns {start, end} offsets of the argument (excluding leading/trailing whitespace),
  * or null if the argument doesn't exist.
  */
+// Returns the index just past a string/template/comment span starting at i, else i unchanged. The
+// arg scanners below MUST skip these inert spans: a comma/paren inside "a, b" or `x,${f(1,2)}` or a
+// // comment is NOT an argument boundary. Without this, insert/replace/findArg corrupted code by
+// counting commas inside string/template literals (e.g. emit("a, b", x) -> emit("a, 99, b", x)),
+// persisting ok:true and passing syntax+typecheck — a silent-corruption facade.
+function skipInert(text: string, i: number): number {
+  const c = text[i];
+  if (c === '/' && text[i + 1] === '/') { let j = i + 2; while (j < text.length && text[j] !== '\n') j++; return j; }
+  if (c === '/' && text[i + 1] === '*') { let j = i + 2; while (j < text.length && !(text[j] === '*' && text[j + 1] === '/')) j++; return Math.min(text.length, j + 2); }
+  if (c === '"' || c === "'") { let j = i + 1; while (j < text.length) { if (text[j] === '\\') { j += 2; continue; } if (text[j] === c) return j + 1; j++; } return j; }
+  if (c === '`') {
+    let j = i + 1;
+    while (j < text.length) {
+      if (text[j] === '\\') { j += 2; continue; }
+      if (text[j] === '`') return j + 1;
+      if (text[j] === '$' && text[j + 1] === '{') {
+        let d = 1; j += 2;
+        while (j < text.length && d > 0) { const k = skipInert(text, j); if (k !== j) { j = k; continue; } if (text[j] === '{') d++; else if (text[j] === '}') d--; j++; }
+        continue;
+      }
+      j++;
+    }
+    return j;
+  }
+  return i;
+}
+
 function findArgRange(
   text: string,
   openParenOffset: number,
@@ -114,6 +141,8 @@ function findArgRange(
   argStart = i;
 
   while (i < text.length && depth > 0) {
+    const inert = skipInert(text, i);
+    if (inert !== i) { i = inert; continue; }
     const c = text[i];
     if (c === '(' || c === '[' || c === '{') {
       depth++;
@@ -231,6 +260,8 @@ export function insertCallArg(
   let commasFound = 0;
   let i = paren + 1;
   while (i < original.length) {
+    const inert = skipInert(original, i);
+    if (inert !== i) { i = inert; continue; }
     const c = original[i];
     if (c === '(' || c === '[' || c === '{') depth++;
     else if (c === ')' || c === ']' || c === '}') {

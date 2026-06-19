@@ -3,8 +3,18 @@ import * as cp from 'node:child_process';
 import * as path from 'node:path';
 const BIN={typescript:['typescript-language-server','--stdio'],python:['pyright-langserver','--stdio'],go:['gopls'],rust:['rust-analyzer'],clangd:['clangd'],java:['jdtls'],kotlin:['kotlin-language-server'],php:['intelephense','--stdio'],swift:['sourcekit-lsp'],csharp:['csharp-ls-vs'],lua:['lua-language-server'],graphql:['graphql-lsp','server','-m','stdio'],bash:['bash-language-server','start'],dockerfile:['docker-langserver','--stdio'],json:['vscode-json-language-server','--stdio'],yaml:['yaml-language-server','--stdio'],toml:['taplo','lsp','stdio'],markdown:['marksman','server'],ruby:['solargraph','stdio'],prisma:['prisma-language-server','--stdio'],css:['vscode-css-language-server','--stdio'],html:['vscode-html-language-server','--stdio'],elixir:['elixir-ls'],zig:['zls'],tailwindcss:['tailwindcss-language-server','--stdio'],dockercompose:['docker-compose-langserver','--stdio']};
 const pools=new Map();
+// Teardown: this router pools language servers (each spawns its own child, e.g.
+// typescript-language-server→tsserver) but main() ended with a bare process.exit()
+// that left them running → one orphaned tsserver per invocation, accumulating for
+// hours. Group-kill every pooled server (detached spawn → negative pid kills the
+// whole group incl. tsserver). 'exit' is the sync backstop for every exit path;
+// SIGTERM/SIGINT cover a gate's timeout-kill where nothing else would clean up.
+function shutdownAllPools(){for(const[,p]of pools){try{process.kill(-p.proc.pid,'SIGKILL')}catch{try{p.proc.kill('SIGKILL')}catch{/* gone */}}}pools.clear()}
+process.on('exit',shutdownAllPools);
+process.on('SIGTERM',()=>{shutdownAllPools();process.exit(0)});
+process.on('SIGINT',()=>{shutdownAllPools();process.exit(0)});
 function getPool(l){let p=pools.get(l);if(!p||p.proc.killed){p=start(l);pools.set(l,p)}return p}
-function start(l){const b=BIN[l];if(!b)throw new Error('no LSP: '+l);const[c,...a]=b;const proc=cp.spawn(c,a,{stdio:['pipe','pipe','pipe'],env:{...process.env}});const p={proc,id:1,pending:new Map,buf:'',init:false,diags:[]};proc.stdout.on('data',(d)=>{p.buf+=d.toString();for(const m of extr(p))handle(p,m)});proc.stderr.on('data',()=>{});proc.on('error',(e)=>{rejAll(p,e);pools.delete(l)});proc.on('close',(c)=>{rejAll(p,new Error('exit '+c));pools.delete(l)});return p}
+function start(l){const b=BIN[l];if(!b)throw new Error('no LSP: '+l);const[c,...a]=b;const proc=cp.spawn(c,a,{detached:true,stdio:['pipe','pipe','pipe'],env:{...process.env}});const p={proc,id:1,pending:new Map,buf:'',init:false,diags:[]};proc.stdout.on('data',(d)=>{p.buf+=d.toString();for(const m of extr(p))handle(p,m)});proc.stderr.on('data',()=>{});proc.on('error',(e)=>{rejAll(p,e);pools.delete(l)});proc.on('close',(c)=>{rejAll(p,new Error('exit '+c));pools.delete(l)});return p}
 function rejAll(p,err){for(const[,r]of p.pending)r.reject(err);p.pending.clear()}
 function extr(p){const ms=[];while(true){const i=p.buf.indexOf('\r\n\r\n');if(i===-1)break;const m=p.buf.slice(0,i).match(/Content-Length: (\d+)/i);if(!m){p.buf=p.buf.slice(i+4);continue}const len=parseInt(m[1],10),s=i+4;if(p.buf.length<s+len)break;try{ms.push(JSON.parse(p.buf.slice(s,s+len)))}catch{}p.buf=p.buf.slice(s+len)}return ms}
 function handle(p,m){if(m.method==='textDocument/publishDiagnostics'){p.diags=m.params?.diagnostics||[];return}if(m.method&&m.id===undefined)return;if(m.id!==undefined&&m.id!==null){const r=p.pending.get(m.id);if(r){p.pending.delete(m.id);m.error?r.reject(new Error(m.error.message||'err')):r.resolve(m.result)}}}

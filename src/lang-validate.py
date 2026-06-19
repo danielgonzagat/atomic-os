@@ -40,8 +40,8 @@ def _load_grammars():
         'go':         ('tree_sitter_go', 'language'),
         'rust':       ('tree_sitter_rust', 'language'),
         'javascript': ('tree_sitter_javascript', 'language'),
-        'typescript': ('tree_sitter_javascript', 'language'),
-        'tsx':        ('tree_sitter_javascript', 'language'),
+        'typescript': ('tree_sitter_typescript', 'language'),
+        'tsx':        ('tree_sitter_typescript', 'language_tsx'),
     }
 
     for lang, (mod_name, attr_name) in _registry.items():

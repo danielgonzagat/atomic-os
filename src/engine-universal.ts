@@ -34,6 +34,23 @@ const EXT_TO_GRAMMAR: Record<string, string> = {
   '.cc': 'cpp', '.cpp': 'cpp', '.cxx': 'cpp', '.hpp': 'cpp', '.hh': 'cpp',
   '.sh': 'bash', '.bash': 'bash', '.zsh': 'bash',
   '.json': 'json',
+  '.html': 'html', '.htm': 'html',
+  '.css': 'css', '.scss': 'css', '.less': 'css',
+  '.php': 'php', '.phtml': 'php',
+  '.kt': 'kotlin', '.kts': 'kotlin',
+  '.swift': 'swift',
+  '.cs': 'c-sharp',
+  '.scala': 'scala',
+  '.lua': 'lua',
+  '.dart': 'dart',
+  '.ex': 'elixir', '.exs': 'elixir',
+  '.hs': 'haskell', '.lhs': 'haskell',
+  '.graphql': 'graphql', '.gql': 'graphql',
+  '.proto': 'proto',
+  '.zig': 'zig',
+  '.toml': 'toml',
+  '.sql': 'sql',
+  '.yaml': 'yaml', '.yml': 'yaml',
 };
 
 /** Resolve a tree-sitter grammar tag for a file extension (e.g. '.py' -> 'python'), or null. */

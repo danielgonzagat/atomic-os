@@ -54,7 +54,7 @@ function buildClone() {
   fs.chmodSync(C.bootstrap, 0o755);
   fs.chmodSync(C.impl, 0o755);
   fs.copyFileSync(path.join(sourceDir, 'launcher-supervisor.mjs'), C.supervisor);
-  for (const helper of ['atomic-exec-broker.mjs', 'atomic-exec-broker-client.mjs']) {
+  for (const helper of ['atomic-exec-broker.mjs', 'atomic-exec-broker-client.mjs', 'network-proxy.mjs']) {
     fs.copyFileSync(path.join(sourceDir, helper), path.join(C.src, helper));
   }
   fs.cpSync(path.join(sourceDir, 'dist'), C.dist, { recursive: true });
@@ -210,6 +210,7 @@ async function main() {
 
     // 9 — poisoned dist-lkg must NOT clobber a healthy dist
     {
+      fs.mkdirSync(C.lkg, { recursive: true });
       fs.writeFileSync(path.join(C.lkg, 'server.js'), 'process.exit(1);\n');
       // impl unparseable and blessed impl gone (quarantined in 8) → ladder
       // reaches the lkg stage while dist is still healthy

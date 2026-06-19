@@ -14,7 +14,7 @@ import * as childProcess from 'node:child_process';
 import * as path from 'node:path';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { REPO_ROOT, activeWorkspaceRoot, resolveSafeTarget } from './guard.js';
+import { activeWorkspaceRoot, resolveSafeTarget } from './guard.js';
 import { replaceText } from './engine.js';
 import { editSymbol, type SymbolOp } from './advanced.js';
 import { atomicWrite, readUtf8 } from './server-helpers-io.js';
@@ -86,7 +86,7 @@ export function registerToolsConverge(server: McpServer): void {
           }
 
           const existing = targetsByFile.get(workspaceRelPath);
-          const current = existing?.newText ?? readUtf8(t.absPath);
+          const current = existing?.newText ?? (fs.existsSync(t.absPath) ? readUtf8(t.absPath) : '');
           let newText: string;
           let targetUnit = 'converged_file';
           let inlinePreview = `converge committed ${workspaceRelPath}`;

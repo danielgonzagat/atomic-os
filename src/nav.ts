@@ -15,7 +15,7 @@ import * as fs from "node:fs";
 import crypto from "crypto";
 import * as path from "node:path";
 import * as ts from "typescript";
-import { listSignatures, resolveSymbol, resolveNodeAtPosition, type SymbolInfo } from "./symbols.js";
+import { listSignatures, resolveSymbol, resolveSubExpression, resolveNodeAtPosition, type SymbolInfo, type SubExprResult } from "./symbols.js";
 import { universalOutline, universalReadSymbol } from "./engine-universal-nav.js";
 import { extToGrammar } from "./engine-universal.js";
 
@@ -132,19 +132,41 @@ export async function readSymbol(
       fileSha256: crypto.createHash('sha256').update(text).digest('hex'),
     };
   }
-  const { node, info } = resolveSymbol(sf, selector);
-  const start = node.getStart();
-  const end = node.getEnd();
-  const startLinePos = node.getStartLinePos();
-  const endLineStart = text.lastIndexOf("\n", end - 1) + 1;
+  // Try normal symbol resolution, then sub-expression as fallback
+  let symbolResult: { selector: string; kind: string; startLine: number; startColumn: number; endLine: number; endColumn: number; code: string } | null = null;
+  try {
+    const { node, info } = resolveSymbol(sf, selector);
+    const start = node.getStart();
+    const end = node.getEnd();
+    const startLinePos = node.getStartLinePos();
+    const endLineStart = text.lastIndexOf("\n", end - 1) + 1;
+    symbolResult = {
+      selector: info.selector,
+      kind: info.kind,
+      startLine: info.startLine,
+      startColumn: start - startLinePos + 1,
+      endLine: info.endLine,
+      endColumn: end - endLineStart + 1,
+      code: node.getText(),
+    };
+  } catch {
+    try {
+      const sub = resolveSubExpression(sf, selector);
+      symbolResult = {
+        selector: sub.selector,
+        kind: sub.kind,
+        startLine: sub.startLine,
+        startColumn: sub.startColumn,
+        endLine: sub.endLine,
+        endColumn: sub.endColumn,
+        code: sub.code,
+      };
+    } catch {
+      throw new Error(`no symbol or sub-expression matches "${selector}"`);
+    }
+  }
   return {
-    selector: info.selector,
-    kind: info.kind,
-    startLine: info.startLine,
-    startColumn: start - startLinePos + 1,
-    endLine: info.endLine,
-    endColumn: end - endLineStart + 1,
-    code: node.getText(),
+    ...symbolResult,
     fileSha256: crypto.createHash('sha256').update(text).digest('hex'),
   };
 }

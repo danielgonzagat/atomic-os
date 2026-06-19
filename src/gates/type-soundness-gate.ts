@@ -53,7 +53,7 @@ const isCheckable = (rel: string): boolean => TS_RE.test(rel) && !rel.endsWith('
  * also the signal by which this gate bails to `unjudged` in lens mode (a whole-repo
  * type sweep is the verify tool's job, not the per-write floor's).
  */
-const MAX_CHANGED = 256;
+const MAX_CHANGED = 1024;
 const MAX_DIAG_REPORT = 20;
 
 const TEST_FILE_RE = /\.(spec|test)\.[cm]?[jt]sx?$/;
